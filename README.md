@@ -51,12 +51,18 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 
 ### Docker
 
+Runs as a single container bound to **`127.0.0.1:8081`** (front it with your host's reverse proxy — the routes are public + handle PII, so they must not be exposed directly):
+
 ```bash
-docker compose -p apguru-grader up -d --build      # app + nginx
+docker compose -p apguru-grader up -d --build
 docker compose -p apguru-grader down
 ```
 
 The image entrypoint runs `alembic upgrade head && gunicorn app.main:app -c gunicorn.conf.py`, so a redeploy migrates the DB automatically.
+
+### Deployment & CI/CD
+
+Designed to run as its own container on a shared EC2 host. A push to `main` auto-deploys via GitHub Actions ([`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)): it rsyncs the code to the box (preserving host-only `.env` / `vertex-key.json`), runs `docker compose -p apguru-grader up -d --build`, and health-checks. See [`docs/grader-ec2-deployment.md`](docs/grader-ec2-deployment.md) for the full runbook (required GitHub secrets, the host reverse-proxy vhost in [`nginx/nginx.conf`](nginx/nginx.conf), Vertex credentials, and edge access control).
 
 ### Production
 

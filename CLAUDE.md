@@ -48,8 +48,10 @@ ruff check . --fix
 alembic upgrade head
 alembic revision -m "description"
 
-# Docker (app + nginx). Always pass -p apguru-grader so redeploys reuse the
-# same named containers instead of spawning orphans.
+# Docker (single app container, bound to 127.0.0.1:8081 — front it with the host
+# reverse proxy). Always pass -p apguru-grader so redeploys reuse the same named
+# containers instead of spawning orphans. A push to main auto-deploys via
+# .github/workflows/deploy.yml (runbook: docs/grader-ec2-deployment.md).
 docker compose -p apguru-grader up -d --build
 docker compose -p apguru-grader down
 ```

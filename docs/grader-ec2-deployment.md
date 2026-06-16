@@ -1,115 +1,129 @@
-# Shipping the AP FRQ Grader to EC2
+# Deploying the AP FRQ Grader to EC2 (Docker + CI/CD)
 
-Runbook for deploying the grader to the production EC2 host. The grader is **new
-to production**, so this covers code, DB migrations, the Vertex credential, and
-the decision to run the grader endpoints publicly (no JWT — see §5).
+The grader runs as its **own Docker container** on a shared EC2 host that already
+runs other containers. To avoid fighting for ports 80/443, the grader does **not**
+ship its own reverse proxy: the `app` container binds to **`127.0.0.1:8081`** and
+is fronted by the host's edge proxy (see [`nginx/nginx.conf`](../nginx/nginx.conf)
+for a sample vhost). Pushes to `main` auto-deploy via GitHub Actions
+([`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml)).
 
-## What ships
+## Architecture
 
-| Layer | Item |
+```
+Internet ──TLS──► host edge proxy (owns 80/443, access control)
+                        │  proxy_pass
+                        ▼
+                  127.0.0.1:8081  ──►  apguru-grader app container (:8080)
+                                              │
+                                              ├─ Gemini / Vertex AI
+                                              └─ MySQL (prod)
+```
+
+- Single container (`docker-compose.yml`, project name `apguru-grader`), bound to
+  localhost so it is never directly internet-exposed.
+- `alembic upgrade head` runs from the image entrypoint on every container start
+  (idempotent), so migrations apply automatically on deploy.
+- Logs go to CloudWatch via the `awslogs` driver (group `/apguru/app`, stream
+  `apguru-grader`).
+
+## 1. One-time host setup
+
+1. **Docker + compose plugin** installed (the repo's `deploy.sh` bootstraps a
+   fresh box).
+2. **Deploy directory**, e.g. `/opt/apguru/grader`, owned by the deploy user. CI
+   rsyncs the repo here.
+3. **Secrets on the host — never in git** (the rsync deploy explicitly preserves
+   these):
+   - `.env` — production values:
+     ```
+     USE_LOCAL_DB=false
+     DB_HOST=...   DB_USER=...   DB_PASSWORD=...   DB_NAME=...
+     GRADER_USE_VERTEX=true
+     GOOGLE_CLOUD_PROJECT=your-gcp-project-id
+     GOOGLE_CLOUD_LOCATION=global
+     GOOGLE_APPLICATION_CREDENTIALS=/app/vertex-key.json   # container path; omit if using ADC
+     GRADER_HOST_PORT=8081                                  # change if 8081 is taken
+     ```
+   - `vertex-key.json` — the Vertex service-account key, in the deploy dir
+     (`chmod 600`). The handwriting-OCR call runs ~150s and **504s on AI Studio**
+     but completes on Vertex, so production needs a usable Vertex credential.
+     *Alternative:* attach the service account to the **EC2 instance role** (ADC) —
+     then delete the `vertex-key.json` volume line in `docker-compose.yml` and the
+     `GOOGLE_APPLICATION_CREDENTIALS` env var; the SDK picks the role up
+     automatically.
+4. **Edge proxy + DNS + TLS.** Point a subdomain (e.g. `grader.apguru.com`) at the
+   host, terminate TLS, and `proxy_pass` to `127.0.0.1:8081`. Use
+   [`nginx/nginx.conf`](../nginx/nginx.conf) as a starting point, or add an
+   equivalent vhost to your existing proxy.
+5. **First boot** (from the deploy dir): `docker compose -p apguru-grader up -d --build`.
+
+## 2. Access control — REQUIRED (public endpoints, PII)
+
+The four `/api/v1/grader/*` endpoints are public by design (no JWT, no in-app
+authorization — `student_id` comes from the request body and is not checked). They
+**fetch caller-supplied PDF URLs** and **return student scorecards (PII)**. You
+**must** compensate at the edge:
+
+- Restrict `/api/v1/grader/*` at the proxy / security group / WAF (IP allowlist,
+  internal-only listener, or gateway auth). See the sample vhost's access block.
+- Keep an egress allowlist so the PDF fetch can only reach trusted hosts. The app
+  already SSRF-guards the fetch (`app/services/grader/url_guard.py`: rejects
+  non-HTTP(S) schemes and private/loopback/link-local/metadata IPs, re-validating
+  every redirect hop) — the edge allowlist is defence-in-depth on top.
+
+Requiring auth later is a code change (add `Depends(authorize)` back on the grader
+router), not a config toggle.
+
+## 3. CI/CD — push to `main` → deploy
+
+[`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) on every push to
+`main` (or manual `workflow_dispatch`):
+
+1. `rsync` the working tree to `EC2_DEPLOY_DIR` (preserving `.env` /
+   `vertex-key.json` / `venv` via excludes).
+2. `docker compose -p apguru-grader up -d --build` on the host (builds the image,
+   runs migrations on start).
+3. `docker image prune -f`, then poll `http://127.0.0.1:8081/api/v1/health` until
+   healthy (dumps container logs and fails the run if not).
+
+**Required GitHub repo secrets** (Settings → Secrets and variables → Actions):
+
+| Secret | Value |
 |---|---|
-| Code | Grader feature (router/controllers/services — already on `main`) + the **Vertex routing fix** in this PR (`grader_use_vertex` / `prefer_vertex`). |
-| DB | Alembic migrations **020** (grader tables), **021** (AP catalog 14–36 + addenda columns), **022** (4 extra courses: Psychology 17, Macroeconomics 21, Calculus AB 22, Calculus BC 31), **026** (re-key the grader off `test_id`: drops `exam_key`/`year`/`set_label`/`question_map`, adds `test_id`/`test_name`/`answers_json`; **clears existing grader rows** — re-register after). |
-| Config | Vertex service account + `GRADER_USE_VERTEX=true`, other `GRADER_*` knobs. The `/grader` endpoints are public by design (see §5). |
+| `EC2_SSH_KEY` | Private SSH key (PEM) for the deploy user. Put the matching public key in the user's `~/.ssh/authorized_keys` on the host. |
+| `EC2_HOST` | Public IP / DNS of the EC2 instance. |
+| `EC2_USER` | SSH user (e.g. `ubuntu` or `ec2-user`). |
+| `EC2_DEPLOY_DIR` | Absolute path of the deploy dir (e.g. `/opt/apguru/grader`). |
 
-## 1. Merge & deploy the code
-1. Merge the PR to `main`.
-2. On EC2, check out the release commit and install deps in the venv:
-   `pip install -r requirements.txt`.
+The EC2 **security group** must allow SSH (22) from the GitHub Actions runner IP
+ranges, or restrict SSH to a bastion/VPN. (If you'd rather not open inbound SSH,
+switch to a self-hosted runner on the box or an SSM-based deploy — ask and I'll
+wire it.)
 
-## 2. Provision the Vertex credential — never in git
-The grader's handwriting-OCR call runs ~150 s, which **504s on AI Studio**'s
-server-side deadline but completes on **Vertex**. Production must therefore have
-a usable Vertex service account. **Do not commit the key** (`.gitignore` already
-excludes `vertex-key.json` and the project key filename).
+If `GRADER_HOST_PORT` differs from `8081`, update both the host `.env` and the
+`GRADER_HOST_PORT` value in the workflow `env:` block (used by the health check).
 
-Pick one:
-- **Key file on the host (simplest):** copy the SA JSON out-of-band (SSM Run
-  Command, Secrets Manager → file, or `scp`) to e.g. `/opt/apguru/secrets/vertex-sa.json`
-  (`chmod 600`, owned by the app user). Set `GOOGLE_APPLICATION_CREDENTIALS` to it.
-- **No key file (preferred long-term):** attach the service account to the EC2
-  instance role (Workload Identity / Application Default Credentials). The
-  google-genai SDK picks it up automatically — nothing to store or rotate.
+## 4. Smoke test after deploy
 
-## 3. Environment variables (prod)
-Set via your process manager (systemd `Environment=` / gunicorn env / SSM params)
-or the prod `.env` (which is gitignored):
-
+```bash
+# On the host (or through the proxy with the right Host header):
+curl http://127.0.0.1:8081/api/v1/health            # → 200
+GRADER_BASE_URL=http://127.0.0.1:8081/api/v1 \
+  python scripts/tests/grader/test_grader_handwritten_e2e.py biology
+# register → submit → poll → scorecard; confirm the job reaches "succeeded"
+# (OCR ran on Vertex, no 504).
 ```
-# DB → production MySQL (NOT local, NOT UAT)
-USE_LOCAL_DB=false
-DB_HOST=...   DB_USER=...   DB_PASSWORD=...   DB_NAME=...
-JWT_SECRET=...                     # >= 32 chars (still required at startup)
-
-# Gemini: chat/LLM keeps using AI Studio; the grader is routed to Vertex.
-GEMINI_API_KEY=...                 # used by chat + non-grader LLM features
-GRADER_USE_VERTEX=true             # default true; grader prefers Vertex when usable
-GOOGLE_APPLICATION_CREDENTIALS=/opt/apguru/secrets/vertex-sa.json   # (omit if using ADC)
-GOOGLE_CLOUD_PROJECT=your-gcp-project-id
-GOOGLE_CLOUD_LOCATION=global       # Gemini 3.x is served from the global endpoint
-
-# The /grader endpoints are intentionally public (no JWT); see §5. Nothing to set.
-```
-
-`prefer_vertex` is honoured **only when the key file exists** (or ADC is
-available); otherwise the grader safely falls back to `GEMINI_API_KEY`, so a
-misconfigured key path degrades to AI Studio rather than crashing.
-
-## 4. Database migrations
-1. **Back up the prod DB.**
-2. `alembic upgrade head` — applies 020/021/022 (idempotent: `CREATE TABLE IF
-   NOT EXISTS` / upserts) **and 026**. ⚠️ **026 is destructive for grader data:**
-   it `DELETE`s every `ap_exam` / `grading_job` row before re-keying the schema
-   to `test_id` (the old `exam_key`/`year`/`set_label` rows can't be migrated in
-   place). The grader is parse-once and re-registration is cheap, so this is
-   intended — just re-register after (step 4 / §6).
-3. Verify:
-   - tables `ap_exam`, `grading_job` exist; `ap_exam` has `test_id` (unique) +
-     `test_name`, no `exam_key`/`year`/`set_label`/`question_map`; `grading_job`
-     has `answers_json`, no `source_test_id`/`source_quiz_id`;
-   - `course_configs` has ids 14–36 **and** 17/21/22/31 (all `is_active=1`).
-4. **Re-register exams after 026** (they were cleared):
-   `python scripts/tests/grader/register_all_exams.py`.
-
-## 5. Grader auth on production — PUBLIC BY DESIGN (no JWT)
-The four `/api/v1/grader/*` endpoints are intentionally public in **every**
-environment — there is no JWT dependency and no feature flag. (The former
-`config/feature_flags.json` / `GRADER_REQUIRE_AUTH` machinery has been removed;
-`app/api/router.py` registers the grader router with no auth dependency.)
-Everything else in the API stays JWT-protected.
-
-> ⚠️ **Security caveat.** These endpoints (a) **fetch caller-supplied PDF URLs**
-> and (b) **return student scorecards** (PII), with **no in-app authorization**
-> (the `student_id` is taken from the request body and is not checked against any
-> token). You MUST compensate at the edge:
-> - Restrict `/api/v1/grader/*` at the ALB / Nginx / security-group / API-gateway
->   / WAF level (IP allowlist, internal-only listener, or gateway-level auth).
-> - Keep an egress allowlist so the PDF fetch can only reach trusted hosts (e.g.
->   the `papervideo` S3 bucket). The app already SSRF-guards the fetch
->   (`app/services/grader/url_guard.py`: rejects non-HTTP(S) schemes and any host
->   resolving to a private / loopback / link-local / cloud-metadata IP, and
->   re-validates every redirect hop) — the edge egress allowlist is recommended
->   defence-in-depth on top.
->
-> Requiring auth later is a code change (re-add a `Depends(authorize)` dependency
-> on the grader router in `app/api/router.py`), not a config toggle.
-
-## 6. Restart & smoke test
-1. Restart the app (systemd/gunicorn).
-2. `GET /api/v1/grader/exams` → `200`.
-3. End-to-end on the host (set `GRADER_BASE_URL` to the prod base, e.g.
-   `http://127.0.0.1:8080/api/v1`):
-   - `python scripts/tests/grader/register_all_exams.py` — registers every exam.
-   - `python scripts/tests/grader/test_grader_handwritten_e2e.py biology` —
-     register → submit → poll → scorecard. Confirm the job reaches `succeeded`
-     (i.e. OCR ran on Vertex, **no 504**).
 
 ## Rollback
-- **Code:** redeploy the previous commit.
-- **DB:** `alembic downgrade 021` drops the 4 extra courses (022.downgrade).
-  020/021 are additive — leave them unless fully removing the grader.
 
-## Cost / capacity note
-OCR uses `gemini-3.1-pro-preview` on Vertex (~150–160 s for a ~7-page handwritten
-submission). `grader_max_concurrent_jobs` (default 2) caps in-flight grades;
-excess jobs queue. Size the instance and Vertex quota accordingly.
+Redeploy a previous commit (revert on `main`, or check out the prior commit in the
+deploy dir and `docker compose -p apguru-grader up -d --build`). Migrations are
+additive; only migration `026` was destructive to grader rows and is already
+applied — re-register exams if you ever reset that data.
+
+## Capacity note
+
+OCR uses `gemini-3.1-pro-preview` on Vertex (~150–160s for a ~7-page handwritten
+submission). `grader_max_concurrent_jobs` (default 2) caps in-flight grades; excess
+jobs queue. The build runs **on the host**, so size the instance for occasional
+build spikes plus the Vertex quota.
