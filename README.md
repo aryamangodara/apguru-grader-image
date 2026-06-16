@@ -62,7 +62,7 @@ The image entrypoint runs `alembic upgrade head && gunicorn app.main:app -c guni
 
 ### Deployment & CI/CD
 
-Designed to run as its own container on a shared EC2 host. A push to `main` auto-deploys via GitHub Actions ([`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)): it rsyncs the code to the box (preserving host-only `.env` / `vertex-key.json`), runs `docker compose -p apguru-grader up -d --build`, and health-checks. See [`docs/grader-ec2-deployment.md`](docs/grader-ec2-deployment.md) for the full runbook (required GitHub secrets, the host reverse-proxy vhost in [`nginx/nginx.conf`](nginx/nginx.conf), Vertex credentials, and edge access control).
+Designed to run as its own container on a shared EC2 host. A push to `main` auto-deploys via a **GitHub Actions self-hosted runner on the box** ([`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)) — no SSH key or stored secrets: it checks out the code (built-in `GITHUB_TOKEN`), rsyncs it into the deploy dir (preserving host-only `.env` / `vertex-key.json`), runs `docker compose -p apguru-grader up -d --build`, and health-checks. See [`docs/grader-ec2-deployment.md`](docs/grader-ec2-deployment.md) for the full runbook (runner install, the host reverse-proxy vhost in [`nginx/nginx.conf`](nginx/nginx.conf), Vertex credentials, and edge access control).
 
 ### Production
 

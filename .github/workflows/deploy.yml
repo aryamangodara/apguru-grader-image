@@ -1,7 +1,9 @@
 name: Deploy to EC2
 
-# Push to main → sync code to the EC2 host → rebuild & restart the grader
-# container. The image is built ON the host (docker compose --build); no registry.
+# Push to main → a GitHub Actions self-hosted runner installed ON the EC2 host
+# rebuilds & restarts the grader container locally. No SSH key, no stored secrets,
+# no inbound ports: the code arrives via the built-in GITHUB_TOKEN and the build
+# runs on the host.
 on:
   push:
     branches: [main]
@@ -14,28 +16,28 @@ concurrency:
 
 env:
   COMPOSE_PROJECT: apguru-grader
-  GRADER_HOST_PORT: "8081"          # must match GRADER_HOST_PORT in the host .env
+  # Stable deploy dir on the host (holds the host-only .env + vertex-key.json).
+  # Override with an Actions repo *variable* named DEPLOY_DIR if you use another path.
+  DEPLOY_DIR: ${{ vars.DEPLOY_DIR || '/opt/apguru/grader' }}
+  # Must match GRADER_HOST_PORT in the host .env (the container binds 127.0.0.1:PORT).
+  GRADER_HOST_PORT: ${{ vars.GRADER_HOST_PORT || '8081' }}
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    # Runs on the self-hosted runner installed on the EC2 instance. Add the
+    # `apguru-grader` label when registering the runner so the job pins to this box.
+    runs-on: [self-hosted, apguru-grader]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure SSH
+      # Sync the fresh checkout into the stable deploy dir. --delete keeps it in
+      # step with main; the excludes protect host-only secrets/state.
+      - name: Sync code to deploy dir
         run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
-
-      # Sync the working tree to the host. --delete keeps the deploy dir in sync
-      # with main, but the excludes protect host-only secrets/state so they are
-      # never overwritten or removed.
-      - name: Sync code to EC2
-        run: |
-          rsync -az --delete \
+          set -euo pipefail
+          mkdir -p "$DEPLOY_DIR"
+          rsync -a --delete \
             --exclude='.git/' \
             --exclude='.github/' \
             --exclude='.env' \
@@ -44,35 +46,27 @@ jobs:
             --exclude='__pycache__/' \
             --exclude='.ruff_cache/' \
             --exclude='.pytest_cache/' \
-            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new" \
-            ./ "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:${{ secrets.EC2_DEPLOY_DIR }}/"
+            ./ "$DEPLOY_DIR/"
 
       # Build the new image and restart only the grader stack. The container
       # entrypoint runs `alembic upgrade head` on start, so migrations apply here.
-      - name: Build & restart on EC2
+      - name: Build & restart
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" bash -se <<'REMOTE'
           set -euo pipefail
-          cd "${{ secrets.EC2_DEPLOY_DIR }}"
-          docker compose -p ${{ env.COMPOSE_PROJECT }} up -d --build
+          cd "$DEPLOY_DIR"
+          docker compose -p "$COMPOSE_PROJECT" up -d --build
           docker image prune -f
-          REMOTE
 
       # Poll the container's localhost-bound port until healthy; dump logs on failure.
       - name: Health check
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
-            "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" bash -se <<'REMOTE'
           set -uo pipefail
           for i in $(seq 1 30); do
-            if curl -fsS "http://127.0.0.1:${{ env.GRADER_HOST_PORT }}/api/v1/health" >/dev/null; then
+            if curl -fsS "http://127.0.0.1:${GRADER_HOST_PORT}/api/v1/health" >/dev/null; then
               echo "grader healthy"; exit 0
             fi
             sleep 3
           done
           echo "::error::grader did not become healthy"
-          cd "${{ secrets.EC2_DEPLOY_DIR }}"
-          docker compose -p ${{ env.COMPOSE_PROJECT }} logs --tail=80 || true
+          cd "$DEPLOY_DIR" && docker compose -p "$COMPOSE_PROJECT" logs --tail=80 || true
           exit 1
-          REMOTE

@@ -74,34 +74,47 @@ authorization — `student_id` comes from the request body and is not checked). 
 Requiring auth later is a code change (add `Depends(authorize)` back on the grader
 router), not a config toggle.
 
-## 3. CI/CD — push to `main` → deploy
+## 3. CI/CD — push to `main` → deploy (self-hosted runner)
 
-[`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) on every push to
-`main` (or manual `workflow_dispatch`):
+Deployment runs on a **GitHub Actions self-hosted runner installed on the EC2
+host** — no SSH key, no stored repo secrets, no inbound ports. On every push to
+`main` (or manual `workflow_dispatch`),
+[`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml):
 
-1. `rsync` the working tree to `EC2_DEPLOY_DIR` (preserving `.env` /
-   `vertex-key.json` / `venv` via excludes).
-2. `docker compose -p apguru-grader up -d --build` on the host (builds the image,
-   runs migrations on start).
-3. `docker image prune -f`, then poll `http://127.0.0.1:8081/api/v1/health` until
-   healthy (dumps container logs and fails the run if not).
+1. `actions/checkout` pulls the code into the runner workspace (via the built-in
+   `GITHUB_TOKEN`).
+2. `rsync` the checkout into the deploy dir (`DEPLOY_DIR`, default
+   `/opt/apguru/grader`), preserving host-only `.env` / `vertex-key.json` via
+   excludes.
+3. `docker compose -p apguru-grader up -d --build` (builds the image, runs
+   migrations on start), then `docker image prune -f`.
+4. Poll `http://127.0.0.1:8081/api/v1/health` until healthy (dumps container logs
+   and fails the run if not).
 
-**Required GitHub repo secrets** (Settings → Secrets and variables → Actions):
+### Install the runner (one-time)
 
-| Secret | Value |
-|---|---|
-| `EC2_SSH_KEY` | Private SSH key (PEM) for the deploy user. Put the matching public key in the user's `~/.ssh/authorized_keys` on the host. |
-| `EC2_HOST` | Public IP / DNS of the EC2 instance. |
-| `EC2_USER` | SSH user (e.g. `ubuntu` or `ec2-user`). |
-| `EC2_DEPLOY_DIR` | Absolute path of the deploy dir (e.g. `/opt/apguru/grader`). |
+1. In GitHub: **Settings → Actions → Runners → New self-hosted runner** (Linux).
+   Run the download + `./config.sh` steps it shows; when prompted for **labels**,
+   add **`apguru-grader`** — the workflow targets
+   `runs-on: [self-hosted, apguru-grader]`, which pins the job to this box even if
+   you have other self-hosted runners.
+2. Install it as a service so it survives reboots:
+   `sudo ./svc.sh install && sudo ./svc.sh start`.
+3. Give the runner's user Docker + deploy-dir access:
+   `sudo usermod -aG docker <runner-user>` (re-login to apply), make it own
+   `DEPLOY_DIR`, and ensure `rsync` + `curl` are installed.
+4. Put the host-only secrets in `DEPLOY_DIR`: the prod `.env` and `vertex-key.json`
+   (§1). They are never in git and the deploy preserves them.
 
-The EC2 **security group** must allow SSH (22) from the GitHub Actions runner IP
-ranges, or restrict SSH to a bastion/VPN. (If you'd rather not open inbound SSH,
-switch to a self-hosted runner on the box or an SSM-based deploy — ask and I'll
-wire it.)
+**No repo secrets are required.** Optional Actions **variables** (Settings →
+Secrets and variables → Actions → *Variables*): `DEPLOY_DIR` (if not
+`/opt/apguru/grader`) and `GRADER_HOST_PORT` (if not `8081`; keep it in sync with
+the host `.env`).
 
-If `GRADER_HOST_PORT` differs from `8081`, update both the host `.env` and the
-`GRADER_HOST_PORT` value in the workflow `env:` block (used by the health check).
+> **Security:** the workflow triggers only on `push` to `main` (and manual
+> dispatch), so fork/PR code can't execute on the box. Anyone who can push to
+> `main` can run commands on the host via the runner — protect `main` and scope
+> write access accordingly.
 
 ## 4. Smoke test after deploy
 
