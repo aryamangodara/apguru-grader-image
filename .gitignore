@@ -18,7 +18,6 @@ ENV/
 # Specific files
 .env
 .DS_Store
-README.md
 .hub/
 .agents/
 
