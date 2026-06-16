@@ -1,0 +1,58 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Pytest / Coverage
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# Specific files
+.env
+.DS_Store
+README.md
+.hub/
+.agents/
+
+
+#json 
+results/
+.vscode/
+.zed/
+# Keep .claude local by default, but share team skills (e.g. /create-pr) via the repo
+.claude/*
+!.claude/skills/
+scripts/eval_data
+
+gen-lang-client-0547340259-af47ade64227.json
+vertex-key.json
+data/sat_skills.json
+# Folders
+claude-code-kit/
+.kit/usage.json
+vertex-key.json
+
+# Nested sibling repo (separate remote)
+apguru-ai-frontend/
+scripts/logs/
+AP Guru Analytical Dashboard.code-workspace
+skills-lock.json
+
+# Postman collections (local only)
+postman/
+.postman/
+
+# Root-level scratch / junk — keep the repo root clean (see CLAUDE.md "Repository hygiene")
+/*.log
+/*.tmp
+/temp_*
+# Throwaway experiments live here; keep new ones local (existing tracked files stay tracked)
+/scratch/

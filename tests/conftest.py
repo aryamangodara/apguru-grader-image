@@ -1,0 +1,43 @@
+"""Shared fixtures for the grader-only test suite."""
+
+from __future__ import annotations
+
+import os
+
+# The Settings singleton fires on first import of any app module — provide dummy
+# DB credentials so the import doesn't fail when no .env is present.
+os.environ.setdefault("DB_HOST", "localhost")
+os.environ.setdefault("DB_USER", "test")
+os.environ.setdefault("DB_PASSWORD", "test")
+os.environ.setdefault("DB_NAME", "test_db")
+
+from unittest.mock import AsyncMock, patch
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+
+@pytest.fixture
+async def client():
+    """Async HTTP client wired to the FastAPI app with the DB fully mocked.
+
+    The grader and health endpoints are public (no auth), so no token is
+    attached. ``ASGITransport`` does not run the app lifespan, so the startup DB
+    connect / grader-job reaper never fire — only the patched singleton is used.
+    """
+    mock_db = AsyncMock()
+    mock_db.connect = AsyncMock(return_value=True)
+    mock_db.dispose = AsyncMock()
+
+    with (
+        patch("app.core.database.Database.get_instance", return_value=mock_db),
+        patch("app.core.database.Database.dispose_all", new_callable=AsyncMock),
+    ):
+        from app.main import create_app
+
+        app = create_app()
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as ac:
+            yield ac
