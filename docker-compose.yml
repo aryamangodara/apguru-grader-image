@@ -4,14 +4,17 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-    # Bind to localhost only. The /grader endpoints are PUBLIC (no auth) and return
-    # student PII, so the container must NOT be exposed directly to the internet —
-    # front it with the host's reverse proxy / edge (Nginx / ALB / WAF), which is
-    # where access control (IP allowlist, etc.) belongs. See nginx/nginx.conf for a
-    # sample host vhost. Override the host port with GRADER_HOST_PORT in .env if
-    # 8081 is already taken by another container.
+    # Bind address defaults to localhost (127.0.0.1) — the SECURE default: the
+    # /grader endpoints are PUBLIC (no auth) and return student PII, so by default
+    # the container is NOT exposed to the internet; front it with the host's reverse
+    # proxy / edge (Nginx / ALB / WAF), which is where access control belongs. See
+    # nginx/nginx.conf for a sample host vhost.
+    #   To publish it DIRECTLY on all interfaces (plain HTTP, no TLS, no edge auth),
+    #   set GRADER_BIND_IP=0.0.0.0 in .env and open the port in the security group.
+    # Override the host port with GRADER_HOST_PORT in .env if 8081 is already taken
+    # by another container.
     ports:
-      - "127.0.0.1:${GRADER_HOST_PORT:-8081}:8080"
+      - "${GRADER_BIND_IP:-127.0.0.1}:${GRADER_HOST_PORT:-8081}:8080"
     volumes:
       # Vertex service-account key (read-only). If you instead use the EC2 instance
       # role (Application Default Credentials), delete this line and unset
