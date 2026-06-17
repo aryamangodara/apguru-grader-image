@@ -66,6 +66,12 @@ python scripts/tests/grader/test_grader_handwritten_e2e.py psychology # any seed
 
 **Grader tuning lives in code/config, not feature env.** Operational knobs (models, DPI, concurrency, reaper window, confidence threshold) are `grader_*` settings in `app/core/config.py`. Per-subject grading/OCR guidance lives in the `course_configs` DB table (`grading_addendum` / `ocr_addendum`), resolved at grade time — not in env.
 
+## Git & PR workflow
+
+- **Never merge to `main` yourself — the maintainer reviews and merges every PR personally.** When work is ready, create a feature branch and open a PR (`gh pr create` or the `create-pr` skill), then **stop**. Do NOT run `gh pr merge`, do NOT push to `main`, and do NOT use `--admin` to bypass protection.
+- `main` is **branch-protected** (PR-only; direct pushes are rejected) and deploys are **release-gated** — merging a PR does *not* deploy; the maintainer publishes a GitHub Release to ship (see Commands / [`docs/grader-ec2-deployment.md`](docs/grader-ec2-deployment.md)).
+- Branch from the latest `main`, keep PRs focused, and leave the merge decision to the maintainer's review.
+
 ## Architecture
 
 **Layered request flow — each layer calls only the one below; never skip a layer:**
