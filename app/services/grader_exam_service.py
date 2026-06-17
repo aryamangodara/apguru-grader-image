@@ -19,13 +19,13 @@ from app.core.course_config import get_course_config
 from app.core.database import Database
 from app.schemas.grader_schema import ExamSummary, RegisterExamRequest, RegisterExamResponse
 from app.services.grader import (
-    RUBRIC_PROMPT,
     ParsedRubric,
     get_gemini_client,
     parse_rubric_pdf,
 )
 from app.services.grader.fetch import fetch_pdf_to_tempfile
 from app.services.grader.tracing import gemini_generation_reporter
+from app.services.grader_prompts import rubric_prompt_for
 
 log = structlog.get_logger(__name__)
 
@@ -139,7 +139,7 @@ async def register_exam(req: RegisterExamRequest) -> RegisterExamResponse:
             subject=subject,
             year=0,
             set_label=req.test_name,
-            prompt_path=RUBRIC_PROMPT,
+            prompt_path=rubric_prompt_for(course.get("exam_body")),
             model=settings.grader_rubric_model,
             on_response=gemini_generation_reporter(
                 "grader.rubric_parse", settings.grader_rubric_model

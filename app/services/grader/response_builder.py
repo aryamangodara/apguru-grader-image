@@ -7,14 +7,53 @@ the frontend can render the card from JSON alone.
 """
 from __future__ import annotations
 
+import re
+
 from app.schemas.grader_schema import (
     GradedPoint,
     GradedQuestion,
     GradedScorecardResponse,
+    QuestionMarks,
 )
 
-from .core import _looks_like_subpart, flatten_rubric_by_subpart
+from .core import _looks_like_subpart, _normalize_qid, flatten_rubric_by_subpart
 from .schemas import ParsedRubric, ParsedSubmission, Scorecard, TranscribedAnswer
+
+
+def _major_qid(qid: str) -> str:
+    """Major question for a (sub-part) qid: '1a'->'1', '3c-ii'->'3', '5'->'5', 'frq-3a'->'frq-3'.
+
+    Matches up to and including the first digit run, so a non-numeric prefix
+    ('frq-3a') still rolls up to its major ('frq-3'). Falls back to the normalized
+    qid when there is no digit at all (e.g. 'intro').
+    """
+    normalized = _normalize_qid(qid)
+    match = re.match(r"^(.*?\d+)", normalized)
+    return match.group(1) if match else normalized
+
+
+def build_question_wise_marks(questions: list[GradedQuestion]) -> list[QuestionMarks]:
+    """Earned marks per major question — sub-parts summed, numeric-sorted.
+
+    Aggregates ``points_earned`` across the graded + unattempted ``GradedQuestion``s
+    so each major question maps to a single number (a flat, directly-parseable shape),
+    regardless of whether the rubric was scored at major or sub-part granularity. The
+    summed marks equal the scorecard's ``total_points_earned``.
+    """
+    totals: dict[str, float] = {}
+    for question in questions:
+        major = _major_qid(question.question_id)
+        totals[major] = totals.get(major, 0.0) + question.points_earned
+
+    def _sort_key(qid: str) -> list[str | int]:
+        # Natural sort: split into text/number runs, numbers compared as ints. Pure
+        # numeric ids sort first (their leading split element is the empty string).
+        return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", qid)]
+
+    return [
+        QuestionMarks(question_id=qid, marks=round(totals[qid], 2))
+        for qid in sorted(totals, key=_sort_key)
+    ]
 
 
 def _resolve_answer(
@@ -151,6 +190,7 @@ def build_scorecard_response(
         percentage=scorecard.percentage,
         total_points_earned=scorecard.total_points_earned,
         total_points_possible=scorecard.total_points_possible,
+        question_wise_marks=build_question_wise_marks(questions + unattempted),
         questions_graded=len(questions),
         review_flags=list(scorecard.review_flags),
         is_handwritten=is_handwritten,
