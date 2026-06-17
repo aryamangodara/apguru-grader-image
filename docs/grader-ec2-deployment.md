@@ -74,15 +74,17 @@ authorization — `student_id` comes from the request body and is not checked). 
 Requiring auth later is a code change (add `Depends(authorize)` back on the grader
 router), not a config toggle.
 
-## 3. CI/CD — push to `main` → deploy (self-hosted runner)
+## 3. CI/CD — publish a Release → deploy (self-hosted runner)
 
-Deployment runs on a **GitHub Actions self-hosted runner installed on the EC2
-host** — no SSH key, no stored repo secrets, no inbound ports. On every push to
-`main` (or manual `workflow_dispatch`),
-[`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml):
+Deployment is **release-gated** and runs on a **GitHub Actions self-hosted runner
+installed on the EC2 host** — no SSH key, no stored repo secrets, no inbound ports.
+**Merging to `main` does not deploy** (main can run ahead of prod). Publishing a
+**GitHub Release** (a tag like `v1.2.0`) — or a manual `workflow_dispatch` —
+triggers [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml):
 
-1. `actions/checkout` pulls the code into the runner workspace (via the built-in
-   `GITHUB_TOKEN`).
+1. `actions/checkout` pulls the **released tag's** code into the runner workspace
+   (via the built-in `GITHUB_TOKEN`) — a reproducible deploy of exactly what you
+   released.
 2. `rsync` the checkout into the deploy dir (`DEPLOY_DIR`, default
    `/opt/apguru/grader`), preserving host-only `.env` / `vertex-key.json` via
    excludes.
@@ -90,6 +92,12 @@ host** — no SSH key, no stored repo secrets, no inbound ports. On every push t
    migrations on start), then `docker image prune -f`.
 4. Poll `http://127.0.0.1:8081/api/v1/health` until healthy (dumps container logs
    and fails the run if not).
+
+**To ship a deploy:** publish a release —
+`gh release create vX.Y.Z --target main --generate-notes` (or GitHub → *Releases →
+Draft a new release*). To redeploy `main` without cutting a release, use
+**Actions → Deploy to EC2 → Run workflow**. To roll back, re-run the workflow from
+an older tag (or publish a hotfix release).
 
 ### Install the runner (one-time)
 
@@ -111,10 +119,10 @@ Secrets and variables → Actions → *Variables*): `DEPLOY_DIR` (if not
 `/opt/apguru/grader`) and `GRADER_HOST_PORT` (if not `8081`; keep it in sync with
 the host `.env`).
 
-> **Security:** the workflow triggers only on `push` to `main` (and manual
-> dispatch), so fork/PR code can't execute on the box. Anyone who can push to
-> `main` can run commands on the host via the runner — protect `main` and scope
-> write access accordingly.
+> **Security:** the workflow triggers only on `release: published` (and manual
+> dispatch), so fork/PR code can't execute on the box. Anyone who can publish a
+> release (or run the workflow) can run commands on the host via the runner —
+> `main` is branch-protected (PR-only); scope release/write access accordingly.
 
 ## 4. Smoke test after deploy
 
