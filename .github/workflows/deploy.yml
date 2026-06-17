@@ -1,12 +1,14 @@
 name: Deploy to EC2
 
-# Push to main → a GitHub Actions self-hosted runner installed ON the EC2 host
-# rebuilds & restarts the grader container locally. No SSH key, no stored secrets,
-# no inbound ports: the code arrives via the built-in GITHUB_TOKEN and the build
-# runs on the host.
+# Deploy is RELEASE-GATED: publishing a GitHub Release (e.g. tag v1.2.0) triggers a
+# GitHub Actions self-hosted runner installed ON the EC2 host to rebuild & restart the
+# grader container at that release's commit. Merges to main do NOT deploy — main can
+# run ahead of prod. Use the manual "Run workflow" button (workflow_dispatch) to
+# redeploy without cutting a release. No SSH key, no stored secrets, no inbound ports:
+# code arrives via the built-in GITHUB_TOKEN and the build runs on the host.
 on:
-  push:
-    branches: [main]
+  release:
+    types: [published]
   workflow_dispatch: {}
 
 # Never let two deploys run at once; let an in-flight deploy finish.
@@ -29,6 +31,9 @@ jobs:
     runs-on: [self-hosted, apguru-grader]
     steps:
       - name: Checkout
+        # On a `release` event this checks out the released tag's commit (a
+        # reproducible deploy of exactly what was released); on manual
+        # workflow_dispatch it checks out the chosen branch (default: main).
         uses: actions/checkout@v4
 
       # Sync the fresh checkout into the stable deploy dir. --delete keeps it in

@@ -1,8 +1,9 @@
-# 🚀 CI/CD Setup Guide — Auto‑Deploy the Grader to EC2
+# 🚀 CI/CD Setup Guide — Release‑Deploy the Grader to EC2
 
-This guide walks you, **one slow step at a time**, through wiring up automatic
-deployment so that **every push to `main` rebuilds and restarts the grader on your
-EC2 box** — with **no SSH keys and no stored GitHub secrets**.
+This guide walks you, **one slow step at a time**, through wiring up deployment so
+that **publishing a GitHub Release rebuilds and restarts the grader on your EC2
+box** (merging to `main` does *not* deploy) — with **no SSH keys and no stored
+GitHub secrets**.
 
 > ⏱️ **Time:** ~20–30 minutes, done once.
 > 🔑 **Secrets to store in GitHub:** none. The deploy runs *on* your EC2 box via a
@@ -13,7 +14,7 @@ EC2 box** — with **no SSH keys and no stored GitHub secrets**.
 ## 🗺️ What you're building
 
 ```
-   you ──git push──► GitHub (main)
+   you ──publish release (vX.Y.Z)──► GitHub
                         │  triggers
                         ▼
             ┌──────────────────────────────┐
@@ -256,8 +257,9 @@ secrets** (Settings → Secrets and variables → Actions → **Variables** tab)
 *Why: to confirm the whole chain works end‑to‑end.*
 
 Either:
-- **Push anything** to `main`, **or**
-- GitHub → **Actions → "Deploy to EC2" → Run workflow** (manual trigger).
+- **Publish a release:** `gh release create v1.0.0 --target main --generate-notes`
+  (or GitHub → **Releases → Draft a new release**), **or**
+- GitHub → **Actions → "Deploy to EC2" → Run workflow** (manual trigger, no release).
 
 ---
 
@@ -277,8 +279,8 @@ docker compose -p apguru-grader ps             # container is "Up (healthy)"
 docker compose -p apguru-grader logs --tail=50 # recent logs
 ```
 
-> 🎉 **That's the CI/CD loop done.** From now on, **just `git push` to `main`** and
-> it deploys automatically.
+> 🎉 **That's the CI/CD loop done.** From now on, **publish a release to deploy** —
+> merges to `main` are safe and won't touch prod until you cut a release.
 
 ---
 
@@ -336,4 +338,4 @@ data. Put your reverse proxy in front of it.
 - [ ] `curl http://127.0.0.1:8081/api/v1/health` returns `ok`
 - [ ] Reverse proxy + TLS + access control in front (Part E)
 
-Once these are ticked, you're done — **push to `main` and it ships.** 🚢
+Once these are ticked, you're done — **publish a release and it ships.** 🚢
