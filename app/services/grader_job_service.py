@@ -34,7 +34,6 @@ from app.schemas.grader_schema import (
     GradingJobResponse,
 )
 from app.services.grader import (
-    GRADE_PROMPT,
     OCR_PROMPT,
     SEGMENT_TYPED_PROMPT,
     get_gemini_client,
@@ -48,6 +47,7 @@ from app.services.grader.fetch import fetch_pdf_to_tempfile
 from app.services.grader.response_builder import build_scorecard_response
 from app.services.grader.tracing import gemini_generation_reporter
 from app.services.grader_exam_service import get_cached_rubric, get_exam
+from app.services.grader_prompts import grade_prompt_for
 
 log = structlog.get_logger(__name__)
 
@@ -205,7 +205,7 @@ async def _do_grade(job_key: str) -> None:
         set_label=exam["test_name"],
         submission=submission,
         rubric=rubric,
-        grade_prompt_path=GRADE_PROMPT,
+        grade_prompt_path=grade_prompt_for(course.get("exam_body")),
         subject_addendum=grading_addendum,
         model_grading=settings.grader_grading_model,
         grading_max_workers=settings.grader_grading_max_workers,

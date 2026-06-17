@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_serializer, model_validator
 
 JobStatus = Literal["queued", "running", "succeeded", "failed"]
 
@@ -108,6 +108,18 @@ class GradedQuestion(BaseModel):
     points: list[GradedPoint] = Field(default_factory=list)
 
 
+class QuestionMarks(BaseModel):
+    """Earned marks for one major question — a flat map for the frontend to render."""
+
+    question_id: str = Field(description="Major question number, e.g. '1', '2'.")
+    marks: float = Field(description="Total marks earned for the question (sub-parts summed).")
+
+    @field_serializer("marks")
+    def _serialize_marks(self, value: float) -> float | int:
+        """Whole marks render as an int (6); fractional stay a float (0.5)."""
+        return int(value) if value == int(value) else value
+
+
 class GradedScorecardResponse(BaseModel):
     test_id: int
     subject: str
@@ -116,6 +128,11 @@ class GradedScorecardResponse(BaseModel):
     percentage: float
     total_points_earned: float
     total_points_possible: float
+    question_wise_marks: list[QuestionMarks] = Field(
+        default_factory=list,
+        description="Earned marks per major question (sub-parts summed), for direct "
+        "mapping to questions.",
+    )
     questions_graded: int
     review_flags: list[str] = Field(default_factory=list)
     is_handwritten: bool
