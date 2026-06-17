@@ -5,8 +5,6 @@ startup if a value is missing. Per-subject grading/OCR guidance lives in the
 ``course_configs`` table (resolved at grade time), NOT here — these are
 infrastructure + operational knobs only.
 """
-from urllib.parse import quote_plus
-
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -103,16 +101,12 @@ class Settings(BaseSettings):
     def get_database_url(self, specific_db: str | None = None) -> str:
         """Constructs the sync database URL (used by Alembic migrations)."""
         user, password, host, port, db = self._effective_db_params(specific_db)
-        # URL-encode credentials so special chars (@ : / # ? = +) in the
-        # user/password don't corrupt URL parsing. SQLAlchemy decodes them back.
-        return f"mysql+pymysql://{quote_plus(user)}:{quote_plus(password)}@{host}:{port}/{db}"
+        return f"mysql+pymysql://{user}:{password}@{host}:{port}/{db}"
 
     def get_async_database_url(self, specific_db: str | None = None) -> str:
         """Constructs the async database URL (used by the application)."""
         user, password, host, port, db = self._effective_db_params(specific_db)
-        # URL-encode credentials so special chars (@ : / # ? = +) in the
-        # user/password don't corrupt URL parsing. SQLAlchemy decodes them back.
-        return f"mysql+aiomysql://{quote_plus(user)}:{quote_plus(password)}@{host}:{port}/{db}"
+        return f"mysql+aiomysql://{user}:{password}@{host}:{port}/{db}"
 
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
