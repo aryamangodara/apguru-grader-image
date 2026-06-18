@@ -20,6 +20,27 @@ so no auth token is needed.
 
     python scripts/tests/grader/test_grader_handwritten_e2e.py            # AP Biology
     python scripts/tests/grader/test_grader_handwritten_e2e.py psychology # any seeded slug
+
+The subject arg always selects the course (and its grading/OCR addenda). Optional
+env vars override the defaults so the same script can drive a real exam record with
+specific PDFs instead of the synthetic IDs + generic per-subject S3 PDFs:
+
+    GRADER_BASE_URL        server base    (default http://127.0.0.1:8080/api/v1)
+    GRADER_TEST_ID         exam test_id   (default 9000 + course_id)
+    GRADER_STUDENT_ID      student_id     (default 2371)
+    GRADER_QUESTIONS_URL   questions PDF  (default <s3>/<subject>/questions.pdf)
+    GRADER_ANSWERS_URL     answers PDF    (default <s3>/<subject>/answers.pdf)
+    GRADER_MARKING_URL     marking PDF    (default <s3>/<subject>/marking-scheme.pdf)
+
+E.g. grade the real test_id=536 / student_id=3139 AP Psychology record against prod,
+using PDFs already hosted on S3:
+
+    GRADER_BASE_URL=http://52.66.25.124:8081/api/v1 \
+    GRADER_TEST_ID=536 GRADER_STUDENT_ID=3139 \
+    GRADER_QUESTIONS_URL=https://papervideo.s3.ap-south-1.amazonaws.com/grader-exams/test-536-psyc/questions.pdf \
+    GRADER_ANSWERS_URL=https://papervideo.s3.ap-south-1.amazonaws.com/grader-exams/test-536-psyc/answers.pdf \
+    GRADER_MARKING_URL=https://papervideo.s3.ap-south-1.amazonaws.com/grader-exams/test-536-psyc/marking-scheme.pdf \
+    python scripts/tests/grader/test_grader_handwritten_e2e.py psychology
 """
 from __future__ import annotations
 
@@ -41,9 +62,10 @@ SCRATCH = PROJECT_ROOT / "scratch"
 LOG_PATH = SCRATCH / "grader_test.log"
 
 BASE_URL = os.environ.get("GRADER_BASE_URL", "http://127.0.0.1:8080/api/v1")
-STUDENT_ID = 2371
+STUDENT_ID = 2371  # default; override with GRADER_STUDENT_ID to grade a real student
 # Synthetic tests.id for this handwritten smoke (grades a PDF; needn't be a real
-# test row). 9000 + course_id keeps it unique and clear of real tests.
+# test row). 9000 + course_id keeps it unique and clear of real tests; override with
+# GRADER_TEST_ID to grade a real exam record.
 TEST_ID_BASE = 9000
 
 POLL_INTERVAL_SECONDS = 50
@@ -147,20 +169,30 @@ def main() -> int:
         print(f"Unknown subject {subject!r}; choose from {sorted(SUBJECTS)}")
         return 2
     course_id = SUBJECTS[subject]
-    test_id = TEST_ID_BASE + int(course_id)
+    test_id = int(os.environ.get("GRADER_TEST_ID", TEST_ID_BASE + int(course_id)))
+    student_id = int(os.environ.get("GRADER_STUDENT_ID", STUDENT_ID))
     test_name = f"{subject.replace('-', ' ').title()} (smoke)"
 
     SCRATCH.mkdir(exist_ok=True)
     _LOG_FH = open(LOG_PATH, "w", buffering=1, encoding="utf-8")  # noqa: SIM115 (long-lived log handle)
 
     folder = f"{S3_BASE}/{subject}"
-    questions_url = f"{folder}/questions.pdf"
-    answers_url = f"{folder}/answers.pdf"
-    marking_url = f"{folder}/marking-scheme.pdf"
+    questions_url = os.environ.get("GRADER_QUESTIONS_URL", f"{folder}/questions.pdf")
+    answers_url = os.environ.get("GRADER_ANSWERS_URL", f"{folder}/answers.pdf")
+    marking_url = os.environ.get("GRADER_MARKING_URL", f"{folder}/marking-scheme.pdf")
+
+    overrides = [
+        v for v in (
+            "GRADER_TEST_ID", "GRADER_STUDENT_ID",
+            "GRADER_QUESTIONS_URL", "GRADER_ANSWERS_URL", "GRADER_MARKING_URL",
+        ) if v in os.environ
+    ]
 
     rule("=")
     log(f"GRADER E2E (handwritten)  subject={subject}  course_id={course_id}")
-    log(f"base_url={BASE_URL}  student_id={STUDENT_ID}  test_id={test_id}  test_name={test_name!r}")
+    log(f"base_url={BASE_URL}  student_id={student_id}  test_id={test_id}  test_name={test_name!r}")
+    if overrides:
+        log(f"env overrides active: {', '.join(overrides)}")
     log(f"log file: {LOG_PATH}")
     rule("=")
 
@@ -210,7 +242,7 @@ def main() -> int:
         # 3. submit
         log("")
         log("STEP 3/5 - submit student answers (enqueue grading)")
-        sub_payload = {"student_id": STUDENT_ID, "answers_pdf_url": answers_url}
+        sub_payload = {"student_id": student_id, "answers_pdf_url": answers_url}
         resp, body = call(client, "POST", f"/grader/exams/{result['test_id']}/submissions", sub_payload)
         if resp.status_code != 202 or not isinstance(body, dict) or not body.get("job_id"):
             log("!! submission did not return 202 + job_id; stopping.")
