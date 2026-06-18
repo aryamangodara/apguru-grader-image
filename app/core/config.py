@@ -11,7 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     env: str = Field(default="STAG")
-    app_name: str = "apguru-grader"
+    app_name: str = "APGuru Grader API"
     debug: bool = True
     api_prefix: str = "/api/v1"
     if debug:
