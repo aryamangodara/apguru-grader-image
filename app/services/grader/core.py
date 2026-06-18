@@ -27,7 +27,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Literal, TypedDict
+from typing import Literal, TypedDict
 
 from google import genai
 from google.genai import types

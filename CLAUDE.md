@@ -90,6 +90,7 @@ Routers are registered in `app/api/router.py` (everything under `/api/v1`). Only
 | `POST` | `/api/v1/grader/register-exam` | Register an exam; parse + cache its rubric (idempotent). → `201` |
 | `GET`  | `/api/v1/grader/exams` | List registered exams (newest first); optional `?course_id=`. → `200` |
 | `POST` | `/api/v1/grader/exams/{test_id}/submissions` | Enqueue grading for one student; returns `job_id`. → `202` |
+| `GET`  | `/api/v1/grader/jobs` | List jobs by `?student_id=` and/or `?test_id=` (≥1 required); lightweight summaries, no scorecard. → `200` |
 | `GET`  | `/api/v1/grader/jobs/{job_id}` | Poll job status; scorecard present once `status == "succeeded"`. → `200` |
 | `GET`  | `/api/v1/health`, `/api/v1/health/ping` | Liveness (used by the Docker healthcheck). |
 

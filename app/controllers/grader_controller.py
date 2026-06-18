@@ -8,6 +8,7 @@ from app.schemas.grader_schema import (
     CreateSubmissionResponse,
     ExamListResponse,
     GradingJobResponse,
+    JobListResponse,
     RegisterExamRequest,
     RegisterExamResponse,
 )
@@ -42,6 +43,18 @@ async def get_job(job_id: str) -> GradingJobResponse:
     if job is None:
         raise HTTPException(status_code=404, detail=f"unknown job_id {job_id!r}")
     return job
+
+
+async def list_jobs(
+    student_id: int | None = None, test_id: int | None = None
+) -> JobListResponse:
+    if student_id is None and test_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="provide at least one of student_id or test_id",
+        )
+    jobs = await grader_job_service.list_jobs(student_id=student_id, test_id=test_id)
+    return JobListResponse(count=len(jobs), jobs=jobs)
 
 
 async def list_exams(course_id: str | None = None) -> ExamListResponse:

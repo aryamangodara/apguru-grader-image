@@ -32,6 +32,7 @@ from app.schemas.grader_schema import (
     CreateSubmissionRequest,
     GradedScorecardResponse,
     GradingJobResponse,
+    JobSummary,
 )
 from app.services.grader import (
     OCR_PROMPT,
@@ -133,6 +134,53 @@ async def get_job(job_id: str) -> GradingJobResponse | None:
         scorecard=scorecard,
         error=row.get("error_message"),
     )
+
+
+async def list_jobs(
+    student_id: int | None = None, test_id: int | None = None
+) -> list[JobSummary]:
+    """List grading jobs filtered by student_id and/or test_id (newest first).
+
+    Lightweight: returns summaries without the full scorecard — only the score
+    percentage is extracted in SQL (so the large scorecard_json blob is never
+    transferred). At least one filter should be supplied (the controller
+    enforces this).
+    """
+    db = Database.get_instance()
+    sql = (
+        "SELECT j.job_key, j.student_id, j.status, j.is_handwritten, j.review_required, "
+        "j.created_at, j.started_at, j.finished_at, j.error_message, "
+        "e.test_id, e.test_name, "
+        "CAST(JSON_EXTRACT(j.scorecard_json, '$.percentage') AS DECIMAL(5,2)) AS percentage "
+        "FROM grading_job j JOIN ap_exam e ON e.id = j.exam_id WHERE 1=1"
+    )
+    params: dict[str, Any] = {}
+    if student_id is not None:
+        sql += " AND j.student_id = :student_id"
+        params["student_id"] = student_id
+    if test_id is not None:
+        sql += " AND e.test_id = :test_id"
+        params["test_id"] = test_id
+    sql += " ORDER BY j.created_at DESC"
+    rows = await db.query(sql, params)
+
+    return [
+        JobSummary(
+            job_id=row["job_key"],
+            test_id=row["test_id"],
+            student_id=row["student_id"],
+            status=row["status"],
+            is_handwritten=bool(row["is_handwritten"]),
+            review_required=bool(row["review_required"]),
+            percentage=float(row["percentage"]) if row["percentage"] is not None else None,
+            test_name=row.get("test_name"),
+            created_at=_iso(row.get("created_at")),
+            started_at=_iso(row.get("started_at")),
+            finished_at=_iso(row.get("finished_at")),
+            error=row.get("error_message"),
+        )
+        for row in rows
+    ]
 
 
 # --- the worker --------------------------------------------------------------

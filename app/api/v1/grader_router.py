@@ -4,6 +4,7 @@ Routes (all under /api/v1/grader):
   POST /grader/register-exam                — register an exam (parse rubric once)
   GET  /grader/exams                        — list all registered exams
   POST /grader/exams/{test_id}/submissions  — enqueue grading for a student
+  GET  /grader/jobs                         — list jobs by student_id and/or test_id
   GET  /grader/jobs/{job_id}                — poll job status / scorecard
 
 Every endpoint is keyed by ``test_id`` (the ``tests.id`` the exam grades).
@@ -23,6 +24,7 @@ from app.schemas.grader_schema import (
     CreateSubmissionResponse,
     ExamListResponse,
     GradingJobResponse,
+    JobListResponse,
     RegisterExamRequest,
     RegisterExamResponse,
 )
@@ -54,6 +56,18 @@ async def create_submission(
 ) -> CreateSubmissionResponse:
     """Enqueue grading for one student submission; returns a job_id to poll."""
     return await grader_controller.create_submission(test_id, body, background_tasks)
+
+
+@router.get("/jobs", response_model=JobListResponse)
+async def list_jobs(
+    student_id: int | None = None, test_id: int | None = None
+) -> JobListResponse:
+    """List grading jobs by ?student_id= and/or ?test_id= (newest first).
+
+    At least one filter is required. Returns lightweight summaries — poll
+    GET /jobs/{job_id} for the full scorecard.
+    """
+    return await grader_controller.list_jobs(student_id, test_id)
 
 
 @router.get("/jobs/{job_id}", response_model=GradingJobResponse)
