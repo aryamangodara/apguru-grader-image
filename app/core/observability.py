@@ -150,6 +150,25 @@ def set_observation_input(input: Any) -> None:
         log.warning("set_observation_input_failed", error=str(exc))
 
 
+def record_trace_output(output: Any) -> None:
+    """Set the output on the current Langfuse observation (root span).
+
+    Use after completing work inside an ``@observe``-managed function to
+    record a curated result payload — e.g. a graded scorecard summary —
+    instead of letting Langfuse auto-capture the return value.  No-op
+    when Langfuse is disabled or no span is active.
+    """
+    if not langfuse_enabled():
+        return
+
+    try:
+        from langfuse import get_client
+
+        get_client().update_current_span(output=output)
+    except Exception as exc:
+        log.warning("record_trace_output_failed", error=str(exc))
+
+
 def get_current_trace_id() -> str | None:
     """Return the active Langfuse trace ID, or ``None`` if no trace.
 

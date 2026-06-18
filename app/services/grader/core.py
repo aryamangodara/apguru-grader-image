@@ -248,7 +248,7 @@ def generate_with_retry(
     max_attempts: int = 4,
     base_delay: float = 2.0,
     label: str = "",
-    on_response: Callable[[Any], None] | None = None,
+    on_response: Callable[..., None] | None = None,
     **kwargs,
 ):
     """Call ``client.models.generate_content`` with retry on transient failures.
@@ -283,7 +283,7 @@ def generate_with_retry(
             continue
         if on_response is not None:
             try:
-                on_response(response)
+                on_response(response, kwargs.get("contents"), label)
             except Exception as hook_exc:  # never let a tracing hook break a grade
                 print(f"    on_response hook failed{tag}: {hook_exc}")
         if _looks_empty(response):
@@ -336,7 +336,7 @@ def ocr_submission(
     model: str = "gemini-3.5-flash",
     thinking_level: str | None = None,
     subject_addendum: str = "",
-    on_response: Callable[[Any], None] | None = None,
+    on_response: Callable[..., None] | None = None,
 ) -> ParsedSubmission:
     """OCR the student's handwritten answers, using the question PDF as context.
 
@@ -416,7 +416,7 @@ def label_typed_answers(
     rubric: ParsedRubric,
     prompt_path: Path,
     model: str = "gemini-3.5-flash",
-    on_response: Callable[[Any], None] | None = None,
+    on_response: Callable[..., None] | None = None,
 ) -> tuple[ParsedSubmission, list[str]]:
     """Build a ParsedSubmission from typed answers stored by MAJOR question id.
 
@@ -511,7 +511,7 @@ def parse_rubric_pdf(
     prompt_path: Path,
     model: str = "gemini-3.5-flash",
     dpi: int = 200,
-    on_response: Callable[[Any], None] | None = None,
+    on_response: Callable[..., None] | None = None,
 ) -> ParsedRubric:
     """Render a marking-scheme PDF and parse it into a ParsedRubric via Gemini.
 
@@ -651,7 +651,7 @@ def grade_question(
     subject_addendum: str = "",
     model: str = "gemini-3.5-flash",
     review_recommended: bool = False,
-    on_response: Callable[[Any], None] | None = None,
+    on_response: Callable[..., None] | None = None,
 ) -> QuestionScorecard:
     """Grade one transcribed answer against one question's rubric.
 
@@ -712,7 +712,7 @@ def grade_questions_parallel(
     max_workers: int = 8,
     verbose: bool = False,
     force_review_qids: set[str] | None = None,
-    on_response: Callable[[Any], None] | None = None,
+    on_response: Callable[..., None] | None = None,
 ) -> list[QuestionScorecard]:
     """Grade many questions concurrently with a thread pool.
 
@@ -1641,7 +1641,7 @@ def grade_submission(
     questions: Literal["all"] | list[str] = _ALL_QUESTIONS,
     config_echo: dict | None = None,
     force_review_qids: set[str] | None = None,
-    on_response: Callable[[Any], None] | None = None,
+    on_response: Callable[..., None] | None = None,
 ) -> GradeSubmissionResult:
     """Grade an already-built submission against an already-parsed rubric.
 

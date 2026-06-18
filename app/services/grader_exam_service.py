@@ -13,10 +13,12 @@ from datetime import datetime
 from typing import Any
 
 import structlog
+from langfuse import observe
 
 from app.core.config import settings
 from app.core.course_config import get_course_config
 from app.core.database import Database
+from app.core.observability import set_observation_input, set_trace_attributes
 from app.schemas.grader_schema import ExamSummary, RegisterExamRequest, RegisterExamResponse
 from app.services.grader import (
     ParsedRubric,
@@ -95,6 +97,7 @@ async def list_exams(course_id: str | None = None) -> list[ExamSummary]:
     return exams
 
 
+@observe(name="grader.register_exam", capture_input=False, capture_output=False)
 async def register_exam(req: RegisterExamRequest) -> RegisterExamResponse:
     """Register an exam for a test_id, parsing + caching its rubric once.
 
@@ -102,6 +105,22 @@ async def register_exam(req: RegisterExamRequest) -> RegisterExamResponse:
     row without calling Gemini. To re-parse (e.g. a corrected marking scheme),
     delete the existing row first.
     """
+    set_observation_input({
+        "test_id": req.test_id,
+        "course_id": req.course_id,
+        "test_name": req.test_name,
+        "is_handwritten": req.is_handwritten,
+        "marking_scheme_pdf_url": req.marking_scheme_pdf_url,
+    })
+    set_trace_attributes(
+        tags=["grader", "rubric_parse", str(req.course_id)],
+        metadata={
+            "test_id": req.test_id,
+            "test_name": req.test_name,
+            "course_id": req.course_id,
+            "rubric_model": settings.grader_rubric_model,
+        },
+    )
     db = Database.get_instance()
 
     # Idempotent on test_id: the first registration wins, so a cache hit echoes
