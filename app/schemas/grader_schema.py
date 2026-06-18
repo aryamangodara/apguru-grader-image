@@ -162,6 +162,30 @@ class GradingJobResponse(BaseModel):
     error: str | None = Field(default=None, description="Present once status == 'failed'.")
 
 
+class JobSummary(BaseModel):
+    """Lightweight grading-job row for the list view (no full scorecard)."""
+
+    job_id: str
+    test_id: int
+    student_id: int
+    status: JobStatus
+    is_handwritten: bool
+    review_required: bool = False
+    percentage: float | None = Field(
+        default=None, description="Final score %, present once status == 'succeeded'."
+    )
+    test_name: str | None = None
+    created_at: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    error: str | None = Field(default=None, description="Present once status == 'failed'.")
+
+
+class JobListResponse(BaseModel):
+    count: int
+    jobs: list[JobSummary] = Field(default_factory=list)
+
+
 # --- exam listing -----------------------------------------------------------
 
 class ExamSummary(BaseModel):

@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 from app.schemas.grader_schema import (
     ExamSummary,
     GradingJobResponse,
+    JobSummary,
     RegisterExamResponse,
 )
 
@@ -157,3 +158,52 @@ async def test_list_exams_returns_test_id(client):
     assert data["count"] == 1
     assert data["exams"][0]["test_id"] == 555
     assert data["exams"][0]["test_name"] == "March 2024"
+
+
+async def test_list_jobs_by_student_returns_summaries(client):
+    job = JobSummary(
+        job_id="job123",
+        test_id=536,
+        student_id=3139,
+        status="succeeded",
+        is_handwritten=True,
+        percentage=42.86,
+        test_name="AP Psychology",
+    )
+    with patch(
+        "app.services.grader_job_service.list_jobs",
+        new=AsyncMock(return_value=[job]),
+    ):
+        resp = await client.get("/api/v1/grader/jobs?student_id=3139")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["count"] == 1
+    item = data["jobs"][0]
+    assert item["job_id"] == "job123"
+    assert item["test_id"] == 536
+    assert item["percentage"] == 42.86
+    assert "scorecard" not in item  # summary view omits the full scorecard
+
+
+async def test_list_jobs_by_test_id(client):
+    with patch(
+        "app.services.grader_job_service.list_jobs",
+        new=AsyncMock(return_value=[]),
+    ) as mock_list:
+        resp = await client.get("/api/v1/grader/jobs?test_id=536")
+    assert resp.status_code == 200
+    assert resp.json()["count"] == 0
+    # Controller forwards the query params by keyword (test_id only).
+    _, kwargs = mock_list.call_args
+    assert kwargs == {"student_id": None, "test_id": 536}
+
+
+async def test_list_jobs_no_filter_returns_400(client):
+    with patch(
+        "app.services.grader_job_service.list_jobs",
+        new=AsyncMock(),
+    ) as mock_list:
+        resp = await client.get("/api/v1/grader/jobs")
+    assert resp.status_code == 400
+    assert "at least one" in resp.json()["detail"]
+    mock_list.assert_not_called()  # guard short-circuits before the service
