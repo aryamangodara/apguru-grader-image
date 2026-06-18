@@ -1,10 +1,19 @@
-"""Bridge the grader's ``on_response`` hook to Langfuse cost tracing.
+"""Bridge the grader's ``on_response`` hook to Langfuse cost and prompt tracing.
 
 The vendored grader calls google-genai directly and exposes an optional
-``on_response`` hook (invoked with the raw response after each billed call). This
-turns that hook into a Langfuse generation recording the model and token usage,
-so the grader's OCR / rubric-parse / typed-label / grading calls show up with
-cost — reusing ``app/core/observability.py``.
+``on_response`` hook invoked after each billed response. This records one
+Langfuse generation per call including:
+
+- model + token usage (for cost attribution)
+- prompt text (text-only parts; image bytes are stripped so PDF page renders
+  don't bloat traces)
+- model's raw text output (the JSON the model returned, for prompt analysis)
+- finish reason and thinking-token count (for reasoning-model debugging)
+- per-call label from ``generate_with_retry`` (e.g. ``"grade 1a"``) as
+  metadata so individual question calls are distinguishable
+
+The hook is a no-op when Langfuse is disabled and never raises — tracing
+must never break grading.
 """
 from __future__ import annotations
 
@@ -39,21 +48,86 @@ def _usage_details(response: Any) -> dict[str, int] | None:
     return details or None
 
 
-def gemini_generation_reporter(name: str, model: str) -> Callable[[Any], None]:
+def _extract_text_contents(contents: Any) -> list[str] | None:
+    """Extract only the string parts from Gemini request contents.
+
+    Rubric-parse and OCR calls interleave text strings (the system prompt,
+    page-label strings like ``"[Answer page 2/4]"``) with rendered PDF pages
+    as ``types.Part`` image blobs. Only the strings are useful in Langfuse —
+    the image blobs are silently dropped so traces stay compact.
+    """
+    if not contents:
+        return None
+    parts = [item for item in contents if isinstance(item, str)]
+    return parts if parts else None
+
+
+def _extract_response_text(response: Any) -> str | None:
+    """Return the model's text output (raw JSON for structured-output calls)."""
+    try:
+        text = getattr(response, "text", None)
+        return text if text else None
+    except Exception:
+        return None
+
+
+def _extract_finish_reason(response: Any) -> str | None:
+    try:
+        candidates = getattr(response, "candidates", None)
+        if candidates:
+            return str(getattr(candidates[0], "finish_reason", None))
+    except Exception:
+        pass
+    return None
+
+
+def gemini_generation_reporter(name: str, model: str) -> Callable[..., None]:
     """Build an ``on_response`` hook that records one Langfuse generation.
 
-    ``name`` tags the phase (e.g. ``grader.ocr``, ``grader.grade``); ``model`` is
-    the Gemini model so Langfuse can price it. The hook is a no-op when Langfuse
-    is disabled and never raises (the grader swallows hook errors, but we stay
-    defensive anyway).
+    ``name`` tags the pipeline phase (e.g. ``grader.ocr``, ``grader.grade``);
+    ``model`` is the Gemini model so Langfuse can price the call.
+
+    The hook signature (as called by ``generate_with_retry``) is::
+
+        hook(response, contents=None, label="")
+
+    - ``contents``  — the request contents; text parts are captured as ``input``
+                      and image Parts are stripped
+    - ``label``     — the per-call label from ``generate_with_retry``
+                      (e.g. ``"grade 1a"``), stored in metadata so individual
+                      question grading calls are distinguishable in Langfuse
     """
 
-    def _report(response: Any) -> None:
+    def _report(response: Any, contents: Any = None, label: str = "") -> None:
         try:
+            usage = _usage_details(response)
+            input_parts = _extract_text_contents(contents)
+            output_text = _extract_response_text(response)
+            finish_reason = _extract_finish_reason(response)
+
+            metadata: dict[str, Any] = {}
+            if finish_reason:
+                metadata["finish_reason"] = finish_reason
+            if label:
+                metadata["label"] = label
+            thinking = int(
+                getattr(
+                    getattr(response, "usage_metadata", None) or object(),
+                    "thoughts_token_count",
+                    0,
+                )
+                or 0
+            )
+            if thinking:
+                metadata["thinking_tokens"] = thinking
+
             emit_generation_span(
                 name=name,
                 model=model,
-                usage_details=_usage_details(response),
+                usage_details=usage,
+                input=input_parts,
+                output=output_text,
+                metadata=metadata or None,
             )
         except Exception as exc:  # pragma: no cover - tracing must never break grading
             log.warning("gemini_generation_reporter_failed", name=name, error=str(exc))

@@ -27,7 +27,7 @@ from app.core.course_config import (
     get_ocr_addendum,
 )
 from app.core.database import Database
-from app.core.observability import set_trace_attributes
+from app.core.observability import record_trace_output, set_trace_attributes
 from app.schemas.grader_schema import (
     CreateSubmissionRequest,
     GradedScorecardResponse,
@@ -45,6 +45,7 @@ from app.services.grader import (
 from app.services.grader.core import _normalize_qid
 from app.services.grader.fetch import fetch_pdf_to_tempfile
 from app.services.grader.response_builder import build_scorecard_response
+from app.services.grader.schemas import Scorecard
 from app.services.grader.tracing import gemini_generation_reporter
 from app.services.grader_exam_service import get_cached_rubric, get_exam
 from app.services.grader_prompts import grade_prompt_for
@@ -181,9 +182,14 @@ async def _do_grade(job_key: str) -> None:
         metadata={
             "test_id": exam["test_id"],
             "test_name": exam["test_name"],
+            "course_id": course_id,
+            "subject": subject,
             "job_key": job_key,
             "ocr_model": settings.grader_ocr_model,
+            "ocr_thinking_level": settings.grader_ocr_thinking_level,
             "grading_model": settings.grader_grading_model,
+            "rubric_model": settings.grader_rubric_model,
+            "grading_max_workers": settings.grader_grading_max_workers,
         },
     )
 
@@ -230,6 +236,7 @@ async def _do_grade(job_key: str) -> None:
         answers_pdf_url=answers_pdf_url,
         page_count=page_count,
     )
+    _record_job_output(scorecard)
 
     await db.write(
         "UPDATE grading_job SET status='succeeded', scorecard_json=:s, review_required=:r, "
@@ -296,6 +303,23 @@ async def _build_typed_submission(client, exam, job, rubric):
             "grader.typed_label", settings.grader_typed_label_model
         ),
     )
+
+
+def _record_job_output(scorecard: Scorecard) -> None:
+    """Record the graded scorecard summary as the grader.job trace output."""
+    out: dict[str, Any] = {
+        "percentage": scorecard.percentage,
+        "total_points_earned": scorecard.total_points_earned,
+        "total_points_possible": scorecard.total_points_possible,
+        "questions_graded": len(scorecard.questions),
+        "review_flag_count": len(scorecard.review_flags),
+    }
+    if scorecard.questions:
+        out["question_scores"] = {
+            q.question_id: {"earned": q.points_earned, "possible": q.points_possible}
+            for q in scorecard.questions
+        }
+    record_trace_output(out)
 
 
 # --- durability --------------------------------------------------------------
