@@ -7,9 +7,7 @@ description: >-
   whenever the user wants to commit changes, push a branch, "ship" / "raise" / "open"
   / "create" / "send up" a PR, or get their work reviewed — even if they only say
   "commit this" or "push my changes". Prefer this skill over ad-hoc git commands so
-  every commit and PR in the project stays consistent and CI-friendly. After the
-  PR is open, it also triages the Gemini Code Assist bot's automated review and
-  implements the genuinely useful suggestions.
+  every commit and PR in the project stays consistent and CI-friendly.
 ---
 
 # Create a Pull Request
@@ -148,63 +146,6 @@ gh pr create --base main \
 ### 8. Report back
 
 Print the PR URL that `gh` returns so the user can open and share it.
-
-### 9. Triage the Gemini bot's review and apply the good suggestions
-
-This repo has Google's **Gemini Code Assist** bot on its PRs: once a PR is open it
-posts an automated review — a summary plus inline suggestions — usually within a
-minute or two. After opening the PR, pull that review and act on it.
-
-**Fetch the bot's comments** (its login is `gemini-code-assist[bot]`). Give it
-~60–90s to run, then read all three surfaces, keeping only the bot's. `gh` fills
-the `{owner}`/`{repo}` placeholders from the current repo, so these work in any
-shell (use the PR number from `gh pr create`):
-
-```bash
-PR=<number>
-
-# Inline, per-line review comments — where the actionable suggestions live:
-gh api "repos/{owner}/{repo}/pulls/$PR/comments" --paginate \
-  --jq '.[] | select(.user.login|test("gemini";"i")) | {path, line, body}'
-
-# Review summaries (overall verdict + prose):
-gh api "repos/{owner}/{repo}/pulls/$PR/reviews" --paginate \
-  --jq '.[] | select(.user.login|test("gemini";"i")) | {state, body}'
-
-# Top-level conversation comments:
-gh api "repos/{owner}/{repo}/issues/$PR/comments" --paginate \
-  --jq '.[] | select(.user.login|test("gemini";"i")) | .body'
-```
-
-Empty result? Wait ~60s and re-fetch once. Still empty → note the bot hasn't
-reviewed yet and stop; the user can re-run later.
-
-**Judge every suggestion — never apply blindly.** The bot mixes real catches
-(bugs, edge cases, security / SSRF / injection gaps, unclear naming) with
-nitpicks, style opinions, and confident false positives. For each one, read the
-cited code and decide:
-
-- **Apply** only when it's *verifiably correct* and a *real* improvement. Confirm
-  the claim against the actual code first — the bot hallucinates context.
-- **Skip** style-only preferences, false positives, anything that conflicts with
-  this repo's `CLAUDE.md` conventions, anything out of this PR's scope, or
-  anything you can't confirm. Dropping a weak suggestion is the right call.
-  **Never** apply a suggestion that would commit a secret, weaken auth, or that
-  you have not verified.
-
-**Implement the accepted ones:**
-
-1. Make the smallest edit that addresses the comment.
-2. Re-run the pre-flight gate (step 4): `ruff check .`, `pytest tests/ -q`.
-3. Commit as a focused Conventional Commit that references the review, e.g.
-   `fix(grader): handle missing job_id (Gemini review)`, then `git push` to
-   update the same PR.
-4. Optionally reply on the thread so the bot/reviewer sees it addressed
-   (`gh pr comment $PR --body "..."`).
-
-**Report** what you applied (with the new commit) and what you deliberately
-skipped, each with a one-line reason — so the human reviewer can sanity-check
-your judgment.
 
 ## Commit type reference
 
