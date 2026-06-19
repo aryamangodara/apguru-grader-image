@@ -233,6 +233,8 @@ def main() -> int:
     print("Reminder: get explicit go-ahead before `gh release create` — publishing")
     print("deploys to production. (Schema migrations live in apguru-centralized-alembic,")
     print("a separate repo, and are NOT applied by this release.)")
+    print("Smoke-test a local build first: `docker compose -p apguru-grader up -d --build`")
+    print("then `python scripts/smoke_test_api.py` — the deploy re-runs it on the EC2 box.")
     print("=" * 70)
     return 1 if fails else 0
 

@@ -156,3 +156,29 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit 1
+
+      # Smoke-test the freshly-built container against EVERY endpoint (in-image,
+      # stdlib-only: scripts/smoke_test_api.py). This exercises the DB-backed routes
+      # (GET /grader/exams, /jobs, …) that the bare /health check above does NOT — so a
+      # build that 500s on the database fails the deploy instead of shipping green.
+      - name: Endpoint smoke test
+        run: |
+          set -uo pipefail
+          cd "$DEPLOY_DIR"
+          if docker compose -p "$COMPOSE_PROJECT" exec -T app python scripts/smoke_test_api.py; then
+            echo "✅ Endpoint smoke test passed (all endpoints, DB-backed routes included)." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::endpoint smoke test failed — DB-backed endpoints are unhealthy"
+            logs_out="$(docker compose -p "$COMPOSE_PROJECT" logs --tail=80 2>&1 || true)"
+            echo "$logs_out"
+            {
+              echo ""
+              echo "### ❌ Endpoint smoke test failed"
+              echo "A core endpoint did not return its expected status. Recent container logs:"
+              echo ""
+              echo '```'
+              echo "$logs_out"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
