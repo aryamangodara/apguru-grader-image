@@ -105,6 +105,23 @@ and that its deploy-prod workflow ran green (so prod actually has the schema). I
 migration isn't in yet, land it there first — the grader won't create schema itself.
 A release with no schema dependency needs nothing here.
 
+### 1b. Endpoint smoke test (run against a real build)
+
+`pytest` mocks the DB, so it can't catch a build that 500s on a live database
+connection — exactly how the PyMySQL 1.2.0 driver bug shipped in v1.3.0. Before
+publishing, smoke-test a locally-built container against every endpoint:
+
+```bash
+docker compose -p apguru-grader up -d --build
+GRADER_BASE_URL=http://127.0.0.1:8081/api/v1 venv/Scripts/python.exe scripts/smoke_test_api.py
+docker compose -p apguru-grader down
+```
+
+All cases must pass (exit 0). It's fast and non-mutating — no LLM, no writes, safe to
+point at prod too. The deploy re-runs the same `scripts/smoke_test_api.py` inside the
+freshly-built container on EC2 and **fails the deploy** if any endpoint is unhealthy, so
+a bad build can't ship green.
+
 ### 2. Choose the version
 
 Look at what's shipping (`git log <last-tag>..origin/main --oneline`) and apply

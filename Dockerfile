@@ -12,6 +12,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app/ app/
+# Ship the endpoint smoke test (stdlib-only) so the deploy can run it against the
+# freshly-built container as a release/deploy gate. See scripts/smoke_test_api.py.
+COPY scripts/smoke_test_api.py scripts/
 COPY gunicorn.conf.py .
 
 EXPOSE 8080
