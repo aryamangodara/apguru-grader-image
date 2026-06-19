@@ -110,7 +110,7 @@ Both then run `grade_submission` (Gemini against the rubric, with the per-course
 - `fetch.py` + `url_guard.py` — SSRF-guarded PDF fetch to a tempfile.
 - `response_builder.py` — `build_scorecard_response` composes the UI-complete response.
 - `tracing.py` — emits Langfuse generation spans for the grader's Gemini calls.
-- `prompts/*.txt` — `ocr.txt`, `rubric_extract.txt`, `grade_question.txt`, `segment_typed.txt`.
+- `prompts/*.txt` — shared `ocr.txt` / `segment_typed.txt`, plus a per-exam-body rubric+grade prompt set: AP (`rubric_extract.txt`, `grade_question.txt`), IB (`*_ib.txt`), Cambridge IGCSE/A-Level (`*_cambridge.txt`). `app/services/grader_prompts.py` picks the set by the course's `exam_body` (`College Board` → AP, `IBO` → IB, `Cambridge IGCSE/A-Level` → Cambridge; anything unknown → AP).
 
 **LLM.** The grader calls Gemini directly via `app/services/grader/core.py::get_gemini_client`. When `grader_use_vertex=true` **and** a Vertex service account is configured (`GOOGLE_APPLICATION_CREDENTIALS` + `GOOGLE_CLOUD_PROJECT`), calls route through Vertex AI's global endpoint — necessary because the handwriting-OCR call routinely runs ~150s, exceeding AI Studio's server-side deadline (504). Otherwise it falls back to `GEMINI_API_KEY`. Default models are the `grader_*_model` settings in `app/core/config.py`.
 
