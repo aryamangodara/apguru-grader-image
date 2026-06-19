@@ -1,4 +1,9 @@
 aiomysql==0.3.2
+# Pinned: PyMySQL is a transitive dep of aiomysql, but 1.2.0 deprecated the
+# Connection.ping(reconnect) arg, which breaks SQLAlchemy 2.0.48's aiomysql
+# pool_pre_ping (AsyncAdapt_aiomysql_connection.ping requires `reconnect`).
+# Do NOT remove until SQLAlchemy/aiomysql support PyMySQL>=1.2.0. See SA #10492/#10650.
+PyMySQL==1.1.2
 cryptography==46.0.5
 fastapi==0.135.1
 google-genai==2.4.0
