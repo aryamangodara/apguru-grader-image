@@ -11,6 +11,13 @@ on:
     types: [published]
   workflow_dispatch: {}
 
+# Give each run a self-explanatory title in the Actions tab — which ref is going out
+# and how it was triggered — instead of a generic "Deploy to EC2". Renders e.g.
+# "Deploy v1.2.0 to EC2 (release)" or "Deploy main to EC2 (manual by @alice)".
+run-name: >-
+  Deploy ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref_name }}
+  to EC2 (${{ github.event_name == 'release' && 'release' || format('manual by @{0}', github.actor) }})
+
 # Never let two deploys run at once; let an in-flight deploy finish.
 concurrency:
   group: deploy-ec2
@@ -34,7 +41,47 @@ jobs:
         # On a `release` event this checks out the released tag's commit (a
         # reproducible deploy of exactly what was released); on manual
         # workflow_dispatch it checks out the chosen branch (default: main).
-        uses: actions/checkout@v4
+        # @v5 runs on Node 24 — @v4 targets the deprecated Node 20 and the runner
+        # was force-running it on Node 24, which logs a deprecation warning.
+        uses: actions/checkout@v5
+
+      - name: Describe deployment
+        # Surface WHAT is being deployed up-front: in the step log AND as a rendered
+        # table on the run's Summary page (Actions tab → this run → Summary). GitHub
+        # context is passed through env vars rather than interpolated into the script,
+        # so a crafted ref/tag can't inject shell on the self-hosted runner.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          REF_NAME: ${{ github.ref_name }}
+          COMMIT_SHA: ${{ github.sha }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "release" ]; then
+            trigger="published release $RELEASE_TAG"
+          else
+            trigger="manual redeploy of $REF_NAME"
+          fi
+          short_sha="${COMMIT_SHA:0:7}"
+          echo "Trigger      : $trigger"
+          echo "Ref          : $REF_NAME"
+          echo "Commit       : $short_sha"
+          echo "Triggered by : @$ACTOR"
+          echo "Deploy dir   : $DEPLOY_DIR"
+          echo "Container    : $COMPOSE_PROJECT on 127.0.0.1:$GRADER_HOST_PORT"
+          {
+            echo "## 🚀 Deploying APGuru Grader to EC2"
+            echo ""
+            echo "| Field | Value |"
+            echo "| ----- | ----- |"
+            echo "| Trigger | $trigger |"
+            echo "| Ref | \`$REF_NAME\` |"
+            echo "| Commit | \`$short_sha\` |"
+            echo "| Triggered by | @$ACTOR |"
+            echo "| Deploy dir | \`$DEPLOY_DIR\` |"
+            echo "| Container | \`$COMPOSE_PROJECT\` → 127.0.0.1:$GRADER_HOST_PORT |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # Sync the fresh checkout into the stable deploy dir. --delete keeps it in
       # step with main; the excludes protect host-only secrets/state.
@@ -42,7 +89,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$DEPLOY_DIR"
-          rsync -a --delete \
+          echo "::group::rsync → $DEPLOY_DIR"
+          rsync -a --delete --itemize-changes \
             --exclude='.git/' \
             --exclude='.github/' \
             --exclude='.env' \
@@ -52,6 +100,7 @@ jobs:
             --exclude='.ruff_cache/' \
             --exclude='.pytest_cache/' \
             ./ "$DEPLOY_DIR/"
+          echo "::endgroup::"
 
       # Build the new image and restart only the grader stack. The app does NOT run
       # migrations — schema changes are applied by the central `apguru-centralized-alembic`
@@ -60,19 +109,50 @@ jobs:
         run: |
           set -euo pipefail
           cd "$DEPLOY_DIR"
+          echo "::group::docker compose up -d --build"
           docker compose -p "$COMPOSE_PROJECT" up -d --build
+          echo "::endgroup::"
           docker image prune -f
+          echo "Running containers:"
+          docker compose -p "$COMPOSE_PROJECT" ps
 
-      # Poll the container's localhost-bound port until healthy; dump logs on failure.
+      # Poll the container's localhost-bound port until healthy. On success record the
+      # running stack on the run summary; on failure dump recent logs (in-line and on
+      # the summary) and fail the job.
       - name: Health check
         run: |
           set -uo pipefail
+          cd "$DEPLOY_DIR"
+          health_url="http://127.0.0.1:${GRADER_HOST_PORT}/api/v1/health"
           for i in $(seq 1 30); do
-            if curl -fsS "http://127.0.0.1:${GRADER_HOST_PORT}/api/v1/health" >/dev/null; then
-              echo "grader healthy"; exit 0
+            if curl -fsS "$health_url" >/dev/null; then
+              waited=$(( i * 3 ))
+              echo "grader healthy after ~${waited}s"
+              ps_out="$(docker compose -p "$COMPOSE_PROJECT" ps || true)"
+              echo "$ps_out"
+              {
+                echo ""
+                echo "### ✅ Deployment succeeded"
+                echo "Grader is healthy at \`$health_url\` (after ~${waited}s)."
+                echo ""
+                echo '```'
+                echo "$ps_out"
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
             fi
             sleep 3
           done
-          echo "::error::grader did not become healthy"
-          cd "$DEPLOY_DIR" && docker compose -p "$COMPOSE_PROJECT" logs --tail=80 || true
+          echo "::error::grader did not become healthy within 90s"
+          logs_out="$(docker compose -p "$COMPOSE_PROJECT" logs --tail=80 2>&1 || true)"
+          echo "$logs_out"
+          {
+            echo ""
+            echo "### ❌ Deployment failed"
+            echo "Grader did not pass the health check at \`$health_url\` within 90s. Recent container logs:"
+            echo ""
+            echo '```'
+            echo "$logs_out"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
           exit 1
