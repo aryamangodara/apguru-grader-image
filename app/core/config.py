@@ -98,11 +98,6 @@ class Settings(BaseSettings):
             specific_db if specific_db is not None else self.db_name,
         )
 
-    def get_database_url(self, specific_db: str | None = None) -> str:
-        """Constructs the sync database URL (used by Alembic migrations)."""
-        user, password, host, port, db = self._effective_db_params(specific_db)
-        return f"mysql+pymysql://{user}:{password}@{host}:{port}/{db}"
-
     def get_async_database_url(self, specific_db: str | None = None) -> str:
         """Constructs the async database URL (used by the application)."""
         user, password, host, port, db = self._effective_db_params(specific_db)

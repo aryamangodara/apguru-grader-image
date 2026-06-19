@@ -44,9 +44,9 @@ pytest tests/unit/ -k url_guard                     # single test by name
 ruff check .
 ruff check . --fix
 
-# Migrations (Alembic — uses the sync PyMySQL connection)
-alembic upgrade head
-alembic revision -m "description"
+# Database migrations are NOT in this repo — they live in the central repo
+# apguru-centralized-alembic (its CI/CD applies `alembic upgrade head` to prod on
+# merge to its main). The grader app does not migrate on boot.
 
 # Docker (single app container, bound to 127.0.0.1:8081 — front it with the host
 # reverse proxy). Always pass -p apguru-grader so redeploys reuse the same named
@@ -57,7 +57,7 @@ docker compose -p apguru-grader up -d --build
 docker compose -p apguru-grader down
 ```
 
-The Docker image entrypoint runs `alembic upgrade head && gunicorn app.main:app -c gunicorn.conf.py`, so a redeploy migrates the DB automatically. Manual end-to-end smoke test (hits a **running** server + a live LLM, not collected by pytest):
+The Docker image entrypoint runs `gunicorn app.main:app -c gunicorn.conf.py` — it does **not** run migrations (schema is owned by the central `apguru-centralized-alembic` pipeline). Manual end-to-end smoke test (hits a **running** server + a live LLM, not collected by pytest):
 
 ```bash
 python scripts/tests/grader/test_grader_handwritten_e2e.py            # AP Biology
@@ -122,8 +122,8 @@ Both then run `grade_submission` (Gemini against the rubric, with the per-course
 - Methods: `query()`, `query_one()`, `write()`, `write_returning_id()` (MySQL `lastrowid`), `write_many()`, and `async with db.transaction() as session:`.
 - **Named SQL parameters only** (`:param`) — never f-strings or `%s`.
 - `settings.use_local_db` toggles all traffic between local MySQL and the configured cloud host.
-- **Grader tables:** `ap_exam` (registered exams + cached rubric JSON) and `grading_job` (per-submission job: status ∈ {queued, running, succeeded, failed}, plus the `scorecard_json`). Created in migration `020`; `026` adjusts `grading_job` test_id identity. Per-course `grading_addendum` / `ocr_addendum` columns live in `course_configs` (added in `019`, seeded in `021`/`022`).
-- Alembic migrations are a **cumulative chain** numbered `001_`…`026_` and use the sync PyMySQL URL. Earlier migrations create tables the grader no longer queries, but later grader migrations depend on them — **keep the whole chain and run `alembic upgrade head`**; do not delete intermediate migrations.
+- **Grader tables:** `ap_exam` (registered exams + cached rubric JSON) and `grading_job` (per-submission job: status ∈ {queued, running, succeeded, failed}, plus the `scorecard_json`); per-course `grading_addendum` / `ocr_addendum` columns live in `course_configs`.
+- **Migrations are NOT in this repo.** The schema (the grader tables and the `course_configs` seeds) is owned by the central [`apguru-centralized-alembic`](https://github.com/aryamangodara/apguru-centralized-alembic) repo, whose CI/CD runs `alembic upgrade head` against the shared prod DB on merge to its `main`. The grader app does **not** migrate on boot. To add/alter a table or seed courses, open a migration PR there (e.g. the Cambridge IGCSE/A-Level courses are seeded by central migration `031`).
 
 ## Conventions
 
@@ -144,7 +144,7 @@ Both then run `grade_submission` (Gemini against the rubric, with the per-course
 | Schemas | `app/schemas/{feature}_schema.py` | router + controller |
 | Grader pipeline primitive | `app/services/grader/` (`core.py` / `schemas.py` / …) | re-exported via `app/services/grader/__init__.py` |
 | Grader prompt | `app/services/grader/prompts/*.txt` | loaded by the grader package |
-| Migration | `alembic/versions/{NNN}_{description}.py` | auto-discovered |
+| DB migration / course seed | the central `apguru-centralized-alembic` repo (PR there) | applied by its CI/CD on merge |
 | Config setting | `app/core/config.py` | also add to `.env.example` |
 
 ## Testing

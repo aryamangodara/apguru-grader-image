@@ -7,23 +7,20 @@ it is safe to run anytime while deciding on a release.
 What it checks (blocking checks gate the exit code):
   - on `main` and not behind `origin/main`            (blocking: the deploy ships main)
   - working tree clean                                 (advisory)
-  - alembic chain has exactly one head                 (blocking: multi-head crashes
-                                                         the container's boot migration)
   - `pytest tests/` passes                             (blocking; skip with --skip-tests)
   - `ruff check .`                                      (advisory; skip with --skip-ruff)
   - commits since the last tag + a suggested SemVer bump
   - in-app FastAPI version vs. the latest tag
 
 Run it with the project's venv interpreter so it exercises the same pytest /
-ruff / alembic the deploy will:
+ruff the deploy will:
 
     venv/Scripts/python.exe .claude/skills/cut-release/scripts/release_preflight.py
     # macOS/Linux: venv/bin/python .claude/skills/cut-release/scripts/release_preflight.py
 
-It does NOT check that the shared prod DB is in alembic-sync with this chain
-(that needs prod credentials) — do that manually per the skill:
-    python -m alembic heads     # what this code upgrades to
-    python -m alembic current   # what prod is on (must be an ancestor of heads)
+Database migrations are NOT part of this repo or this check — they live in the
+central `apguru-centralized-alembic` repo, whose own CI/CD applies them to prod.
+The grader app does not migrate on boot, so there is no chain to validate here.
 """
 from __future__ import annotations
 
@@ -106,22 +103,6 @@ def check_clean_tree(root: Path) -> None:
                "Releases build from the tagged commit, not your tree - but tidy up to avoid confusion.")
     else:
         record(OK, "working tree clean")
-
-
-def check_alembic_single_head(root: Path) -> None:
-    code, out = run([sys.executable, "-m", "alembic", "heads"], root)
-    if code != 0:
-        record(FAIL, "could not read alembic heads", out.strip()[:400])
-        return
-    heads = [ln for ln in out.splitlines() if "(head)" in ln]
-    if len(heads) == 1:
-        record(OK, f"alembic single head: {heads[0].strip()}")
-    elif len(heads) > 1:
-        record(FAIL, f"alembic has {len(heads)} heads (multi-head chain)",
-               "`alembic upgrade head` runs on container boot and fails on multi-head.\n"
-               + "\n".join(h.strip() for h in heads))
-    else:
-        record(FAIL, "no alembic head found", out.strip()[:400])
 
 
 def check_pytest(root: Path) -> None:
@@ -227,9 +208,6 @@ def main() -> int:
     check_branch_and_sync(root)
     check_clean_tree(root)
 
-    print("\nMigrations")
-    check_alembic_single_head(root)
-
     print("\nTests / lint")
     if args.skip_tests:
         record(WARN, "pytest skipped (--skip-tests)")
@@ -252,8 +230,9 @@ def main() -> int:
             print(f"  - {h}")
     else:
         print("VERDICT: GO - no blocking issues." + (f"  ({len(warns)} warning(s) to eyeball.)" if warns else ""))
-    print("Reminder: confirm prod alembic sync (alembic current) and get explicit")
-    print("go-ahead before `gh release create` - publishing deploys to production.")
+    print("Reminder: get explicit go-ahead before `gh release create` — publishing")
+    print("deploys to production. (Schema migrations live in apguru-centralized-alembic,")
+    print("a separate repo, and are NOT applied by this release.)")
     print("=" * 70)
     return 1 if fails else 0
 

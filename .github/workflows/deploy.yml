@@ -53,8 +53,9 @@ jobs:
             --exclude='.pytest_cache/' \
             ./ "$DEPLOY_DIR/"
 
-      # Build the new image and restart only the grader stack. The container
-      # entrypoint runs `alembic upgrade head` on start, so migrations apply here.
+      # Build the new image and restart only the grader stack. The app does NOT run
+      # migrations — schema changes are applied by the central `apguru-centralized-alembic`
+      # pipeline; this deploy only rebuilds and restarts the grader container.
       - name: Build & restart
         run: |
           set -euo pipefail

@@ -21,8 +21,10 @@ Internet ──TLS──► host edge proxy (owns 80/443, access control)
 
 - Single container (`docker-compose.yml`, project name `apguru-grader`), bound to
   localhost so it is never directly internet-exposed.
-- `alembic upgrade head` runs from the image entrypoint on every container start
-  (idempotent), so migrations apply automatically on deploy.
+- Migrations are **not** run by this container. The schema is owned by the central
+  [`apguru-centralized-alembic`](https://github.com/aryamangodara/apguru-centralized-alembic)
+  repo, whose CI/CD applies `alembic upgrade head` to the shared prod DB on merge to
+  its `main`. The grader app does not migrate on boot.
 - Logs go to CloudWatch via the `awslogs` driver (group `/apguru/app`, stream
   `apguru-grader`).
 
@@ -88,8 +90,8 @@ triggers [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml):
 2. `rsync` the checkout into the deploy dir (`DEPLOY_DIR`, default
    `/opt/apguru/grader`), preserving host-only `.env` / `vertex-key.json` via
    excludes.
-3. `docker compose -p apguru-grader up -d --build` (builds the image, runs
-   migrations on start), then `docker image prune -f`.
+3. `docker compose -p apguru-grader up -d --build` (builds the image and restarts
+   the container — it does **not** run migrations), then `docker image prune -f`.
 4. Poll `http://127.0.0.1:8081/api/v1/health` until healthy (dumps container logs
    and fails the run if not).
 
@@ -138,9 +140,9 @@ GRADER_BASE_URL=http://127.0.0.1:8081/api/v1 \
 ## Rollback
 
 Redeploy a previous commit (revert on `main`, or check out the prior commit in the
-deploy dir and `docker compose -p apguru-grader up -d --build`). Migrations are
-additive; only migration `026` was destructive to grader rows and is already
-applied — re-register exams if you ever reset that data.
+deploy dir and `docker compose -p apguru-grader up -d --build`). Schema changes are
+decoupled from app deploys — migrations are applied by the central
+`apguru-centralized-alembic` pipeline, so an app rollback does not roll back the DB.
 
 ## Capacity note
 
