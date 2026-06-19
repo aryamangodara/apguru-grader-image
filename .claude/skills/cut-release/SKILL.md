@@ -6,10 +6,9 @@ description: >-
   release-gated EC2 deploy. Use this whenever the user wants to make / cut /
   ship / publish / tag a release, roll out a new version, deploy to production,
   or "push this live" — even if they only say "release it" or "ship it".
-  Because publishing a GitHub Release auto-deploys to prod (and runs DB
-  migrations on container start), prefer this skill over ad-hoc `gh release` /
-  `git tag` commands so the alembic-chain, version-bump, and verify-the-deploy
-  guardrails are never skipped.
+  Because publishing a GitHub Release auto-deploys to prod, prefer this skill
+  over ad-hoc `gh release` / `git tag` commands so the version-bump and
+  verify-the-deploy guardrails are never skipped.
 ---
 
 # Cut a Release
@@ -26,6 +25,14 @@ runbook.** The deeper infra details live in
 [`docs/grader-ec2-deployment.md`](../../../docs/grader-ec2-deployment.md); read it
 when you need the host setup, edge proxy, or CloudWatch specifics.
 
+> **Database migrations are NOT part of a grader release.** The schema is owned by
+> the central [`apguru-centralized-alembic`](https://github.com/aryamangodara/apguru-centralized-alembic)
+> repo, whose own CI/CD applies `alembic upgrade head` to the shared prod DB when a
+> migration PR lands on *its* `main`. The grader app does **not** migrate on boot.
+> If the code you're releasing needs a new table/column or a course seed, make sure
+> the matching migration PR has already merged in that repo (so the schema exists
+> before the app that depends on it ships). See **Schema changes** below.
+
 ## What happens the moment you publish
 
 Publishing a release fires [`.github/workflows/deploy.yml`](../../../.github/workflows/deploy.yml)
@@ -36,9 +43,8 @@ on the `[self-hosted, apguru-grader]` runner installed on the EC2 box:
 2. **rsync** the tree into the deploy dir (`/opt/apguru/grader`), preserving the
    host-only `.env` and `vertex-key.json`.
 3. **`docker compose -p apguru-grader up -d --build`** — rebuilds the image and
-   restarts the container. The container entrypoint runs
-   **`alembic upgrade head` then `gunicorn`**, so **DB migrations apply here, on
-   the shared prod DB (`uat_apguru_new`)**.
+   restarts the container, whose entrypoint is just **`gunicorn`**. No migrations
+   run here; the app talks to a schema the central pipeline already applied.
 4. **Health check** — polls `http://127.0.0.1:8081/api/v1/health` for ~90s and
    fails the run (dumping container logs) if it never comes up.
 
@@ -52,19 +58,17 @@ on the `[self-hosted, apguru-grader]` runner installed on the EC2 box:
   Any code change a release needs (e.g. the version bump) goes through a normal
   PR — use the `create-pr` skill — and the maintainer merges it. Don't
   `--admin`, don't force-push, don't self-merge.
-- **The alembic chain must be a single head *and* in sync with the shared prod
-  DB.** Because the container runs `alembic upgrade head` on boot against
-  `uat_apguru_new` (shared with other apps), a multi-head chain or a prod DB
-  whose revision this codebase doesn't know about makes the container **crash on
-  start** — a failed deploy. Verify a single head and that prod is reachable
-  from this chain *before* publishing. (See the pre-flight script.)
+- **Schema changes ship separately, in the central repo.** A grader release never
+  migrates the DB. If this release's code depends on a schema change, land that in
+  [`apguru-centralized-alembic`](https://github.com/aryamangodara/apguru-centralized-alembic)
+  **first** (its CI/CD applies it to prod on merge), then release the app. Shipping
+  app code ahead of its migration means runtime errors against a missing table/column.
 - **Release from a fully-merged, green `main`.** The deploy is built from the
   tag, so whatever is on `main` at tag time is what ships. Land every intended
   PR first and confirm tests pass.
 - **Use SemVer and keep the in-app version in sync.** Tag `vMAJOR.MINOR.PATCH`.
   The FastAPI `version=` in [`app/main.py`](../../../app/main.py) should match the
-  tag (it is currently **stale** — `1.0.0` while the latest tag is `v1.1.0`);
-  bump it as part of release prep.
+  tag; if it lags, bump it as part of release prep (see step 3).
 - **The grader endpoints are public by design** — access control is enforced at
   the edge, not in the app. A release doesn't change that, but never "fix" it by
   loosening the SSRF guard or binding the container to `0.0.0.0`.
@@ -74,7 +78,7 @@ on the `[self-hosted, apguru-grader]` runner installed on the EC2 box:
 ### 1. Pre-flight gate (read-only — safe to run anytime)
 
 Run the bundled checker with the project's venv interpreter so it exercises the
-same pytest / ruff / alembic the deploy will:
+same pytest / ruff the deploy will:
 
 ```bash
 venv/Scripts/python.exe .claude/skills/cut-release/scripts/release_preflight.py
@@ -86,8 +90,6 @@ It verifies, and prints a GO / REVIEW summary for:
 - you're on `main` and **not behind** `origin/main` (the deploy ships `main`),
 - `pytest tests/` is green (blocking),
 - `ruff check .` (advisory — the repo carries a few known lints),
-- the alembic chain has **exactly one head** (blocking — multi-head crashes the
-  boot migration),
 - the commits since the last tag, and a **suggested next version** inferred from
   their Conventional-Commit types,
 - the current in-app version string vs. the latest tag.
@@ -95,28 +97,13 @@ It verifies, and prints a GO / REVIEW summary for:
 If it reports a blocking failure, stop and fix the cause — a red pre-flight is a
 red deploy.
 
-**HARD GATE — prod-DB alembic sync (the script can't check this; do it EVERY
-release, even one with no migrations).** `uat_apguru_new` is *shared* with the
-parent analytics app, which migrates the common `alembic_version` on its own —
-so prod can sit **ahead** of this repo's chain with zero migrations in *your*
-release. The container re-runs `alembic upgrade head` on every restart, so a
-prod revision this chain doesn't contain **crash-loops the new container and
-takes the grader down**. With prod creds in `.env` (`USE_LOCAL_DB=false`):
-
-```bash
-venv/Scripts/python.exe -m alembic heads      # the revision this code knows as head
-venv/Scripts/python.exe -m alembic current    # the revision prod is actually on
-```
-
-Prod's `current` **must** be a revision in this chain (an ancestor of `heads`,
-or equal). If it's a revision this repo doesn't have (e.g. prod at `030` while
-the chain tops at `028`), **DO NOT PUBLISH** — port the missing revisions into
-`alembic/versions/` first, or reconcile per the runbook. If you *can't* run this
-check (no prod creds, blocked by a guardrail), the release is **blocked** until
-it's confirmed — never substitute the reasoning "no new migrations, so it's
-safe." That exact rationalization took prod down at v1.2.0 (2026-06-18): chain
-at `028`, prod drifted to `030`, boot migration crash-looped. See the
-`release-alembic-sync-gate` memory.
+**Schema changes (do this when the release needs one).** The pre-flight can't see
+the prod DB. If any code in this release reads/writes a new table, column, or seeded
+course, confirm the corresponding migration PR has **already merged** in
+[`apguru-centralized-alembic`](https://github.com/aryamangodara/apguru-centralized-alembic)
+and that its deploy-prod workflow ran green (so prod actually has the schema). If the
+migration isn't in yet, land it there first — the grader won't create schema itself.
+A release with no schema dependency needs nothing here.
 
 ### 2. Choose the version
 
@@ -125,7 +112,7 @@ SemVer:
 
 | Bump | When | Example |
 |---|---|---|
-| **MAJOR** (`x.0.0`) | Breaking API/contract change, or a destructive migration consumers must know about | `v2.0.0` |
+| **MAJOR** (`x.0.0`) | Breaking API/contract change consumers must adapt to | `v2.0.0` |
 | **MINOR** (`1.x.0`) | New backward-compatible capability (`feat:`) — a new endpoint, new grading mode | `v1.2.0` |
 | **PATCH** (`1.1.x`) | Bug fixes / chores only (`fix:`, `chore:`), no new surface | `v1.1.1` |
 
@@ -193,30 +180,27 @@ definition of done — report both back to the user with the release URL.
 
 The workflow's health check fails loudly if the container doesn't come up. Get
 its log tail (`gh run view <id> --log-failed`) and read the **container** dump
-at the end — the cause is usually there. First, identify the failure mode:
+at the end — the cause is usually there.
 
-- **"Can't locate revision …" (DB ahead of the chain).** A tag rollback will
-  **NOT** fix this — every grader tag shares the same chain max, so v1.1.0
-  crash-loops identically. The old container only stayed up because it hadn't
-  restarted since the shared DB drifted. Fix it by porting the missing revisions
-  into `alembic/versions/` (resync the chain), or by softening the boot migration
-  so that *only* this drift is tolerated (the Dockerfile `CMD` already does this
-  — it continues on "locate revision" but still aborts on any other alembic
-  error). This is the step-1 HARD GATE you must check *before* publishing.
-- **Any other failure** (a genuinely bad release): **redeploy a known-good ref**
-  via manual dispatch — `gh workflow run deploy.yml --ref vLAST-GOOD` — or
-  **publish a hotfix release** from a fix commit on `main` (steps 1–5, PATCH bump).
+- **Bad app release:** **redeploy a known-good ref** via manual dispatch —
+  `gh workflow run deploy.yml --ref vLAST-GOOD` — or **publish a hotfix release**
+  from a fix commit on `main` (steps 1–5, PATCH bump).
+- **App expects schema that isn't there** (e.g. "Unknown column" / "doesn't exist"):
+  the migration hasn't been applied. Land/merge the migration PR in
+  `apguru-centralized-alembic` (its pipeline applies it), then redeploy. An app
+  rollback alone won't help if the code was already shipped ahead of its migration —
+  fix the ordering.
 
-Migrations are additive and not auto-reversed; only `026` was ever destructive
-(it cleared grader rows, already applied long ago). If a bad migration shipped,
-fix forward with a new migration + release rather than hand-editing prod.
+Because the app no longer migrates, an app rollback never touches the DB. Schema
+roll-forward/rollback is handled entirely in the central repo (additive migrations;
+fix forward with a new migration there rather than hand-editing prod).
 
 ## Pre-flight checklist (copy-paste)
 
 ```
 [ ] On main, synced with origin/main (not behind); intended PRs all merged
 [ ] pytest tests/ green
-[ ] alembic: single head, and prod `alembic current` is in this chain (HARD GATE — don't publish if unconfirmed)
+[ ] Any schema this release needs is already merged + applied via apguru-centralized-alembic
 [ ] Version picked (SemVer) and app/main.py version= bumped + merged
 [ ] Release notes previewed (gh ... --generate-notes --draft)
 [ ] Explicit go-ahead to deploy to production
@@ -227,6 +211,9 @@ fix forward with a new migration + release rather than hand-editing prod.
 
 ## Pointers
 
+- **Database migrations (separate repo):**
+  [`apguru-centralized-alembic`](https://github.com/aryamangodara/apguru-centralized-alembic)
+  — open a migration PR there; its CI/CD applies it to prod on merge.
 - **Infra deep-dive / host setup / rollback detail:**
   [`docs/grader-ec2-deployment.md`](../../../docs/grader-ec2-deployment.md)
 - **The deploy workflow itself:**

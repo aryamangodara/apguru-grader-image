@@ -5,8 +5,5 @@ if (Test-Path "venv\Scripts\Activate.ps1") {
     . .\venv\Scripts\Activate.ps1
 }
 
-# Optional: run database migrations before starting
-# alembic upgrade head
-
 # Start the application
 uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload

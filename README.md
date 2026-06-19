@@ -39,15 +39,14 @@ pip install -r requirements-dev.txt
 # 2. Configure — copy the template and fill in DB + Gemini/Vertex credentials
 cp .env.example .env
 
-# 3. Migrate the database (creates ap_exam + grading_job, etc.)
-alembic upgrade head
-
-# 4. Run the dev server (auto-reload)
+# 3. Run the dev server (auto-reload)
 uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 ```
 
 - Health check: `GET http://localhost:8080/api/v1/health`
 - Interactive API docs: `http://localhost:8080/docs`
+
+> **Database schema/migrations are not managed in this repo.** They live in [`apguru-centralized-alembic`](https://github.com/aryamangodara/apguru-centralized-alembic) — point that repo at your DB and run `alembic upgrade head` there to create `ap_exam` / `grading_job` / `course_configs`.
 
 ### Docker
 
@@ -58,7 +57,7 @@ docker compose -p apguru-grader up -d --build
 docker compose -p apguru-grader down
 ```
 
-The image entrypoint runs `alembic upgrade head && gunicorn app.main:app -c gunicorn.conf.py`, so a redeploy migrates the DB automatically.
+The image entrypoint runs `gunicorn app.main:app -c gunicorn.conf.py`. It does **not** run migrations — schema changes are applied by the central [`apguru-centralized-alembic`](https://github.com/aryamangodara/apguru-centralized-alembic) pipeline.
 
 ### Deployment & CI/CD
 
@@ -157,7 +156,6 @@ app/
   schemas/       grader_schema, health_schema, llm_schema
   core/          config, database singleton, course_config, observability, logging
   middleware/    request-logging middleware (request_id correlation)
-alembic/         database migrations (cumulative chain 001_ … 026_; run `alembic upgrade head`)
 nginx/           reverse-proxy config for the Docker stack
 docs/            grader-ec2-deployment.md
 ```

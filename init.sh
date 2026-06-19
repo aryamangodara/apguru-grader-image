@@ -10,8 +10,5 @@ elif [ -d "venv/bin" ]; then
     source venv/bin/activate
 fi
 
-# Optional: run database migrations before starting
-# alembic upgrade head
-
 # Start the application
 uvicorn app.main:app --host localhost --port 8080 --reload
