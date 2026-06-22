@@ -56,7 +56,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title=settings.app_name,
-        version="1.3.1",
+        version="1.4.0",
         description="Auto-grades AP® Free-Response Questions (FRQ) from handwritten or typed student submissions.",
         debug=settings.debug,
         lifespan=lifespan,
