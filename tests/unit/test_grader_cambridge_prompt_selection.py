@@ -80,6 +80,8 @@ async def _prompt_path_for_register(exam_body: str):
     )
     db = MagicMock()
     db.write = AsyncMock()
+    # issue #11: register_exam now validates test_id against `tests` via query_one.
+    db.query_one = AsyncMock(return_value={"id": 1})
     captured: dict = {}
 
     def fake_parse(*_args, **kwargs):

@@ -41,6 +41,23 @@ async def get_exam(test_id: int) -> dict | None:
     )
 
 
+async def assert_test_is_valid(test_id: int) -> None:
+    """Raise ``ValueError`` unless ``test_id`` is a live row in the ``tests`` table.
+
+    The ``tests`` table is owned by the main app in the shared DB; a test is
+    "valid" when it exists and has not been soft-deleted (``deleted_at IS NULL``).
+    Guards ``register_exam`` against parsing a rubric for a non-existent or
+    deleted test (issue #11). ``ValueError`` maps to HTTP 400 in the controller.
+    """
+    db = Database.get_instance()
+    row = await db.query_one(
+        "SELECT id FROM tests WHERE id = :test_id AND deleted_at IS NULL",
+        {"test_id": test_id},
+    )
+    if row is None:
+        raise ValueError(f"test_id {test_id} is not a valid test (not found or deleted)")
+
+
 def get_cached_rubric(exam_row: dict) -> ParsedRubric:
     """Rehydrate the cached ParsedRubric for an exam — no Gemini call."""
     return ParsedRubric.model_validate_json(exam_row["rubric_json"])
@@ -122,6 +139,10 @@ async def register_exam(req: RegisterExamRequest) -> RegisterExamResponse:
         },
     )
     db = Database.get_instance()
+
+    # issue #11: reject a test_id that isn't a live row in the main app's `tests`
+    # table (non-existent or soft-deleted) before any cache lookup or Gemini parse.
+    await assert_test_is_valid(req.test_id)
 
     # Idempotent on test_id: the first registration wins, so a cache hit echoes
     # the stored row (course_id/test_name/subject all from what was persisted).
