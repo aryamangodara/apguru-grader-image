@@ -27,6 +27,8 @@ jobs/{job_id} ──► poll until status == "succeeded" ──► read scorecar
 
 Grading runs asynchronously in a background task (capped by a concurrency semaphore); clients poll the job until it succeeds or fails. A startup reaper fails any job left `running` by a previous restart.
 
+The scorecard is point-by-point (per question and per rubric point) and — when `GRADER_ENABLE_SUMMARIES` is on (the default) — also carries three short, role-tailored summaries: `student_summary`, `teacher_summary`, and `parent_summary`.
+
 ## Quickstart
 
 Use **Python 3.11–3.13** to run grading (PyMuPDF has no 3.14 wheel yet) and a reachable **MySQL** instance.
@@ -78,6 +80,7 @@ All routes are under `/api/v1`. Identifiers are keyed on `test_id` everywhere.
 | `POST` | `/grader/register-exam` | Register an exam; parse + cache its rubric (idempotent). | `201` |
 | `GET`  | `/grader/exams` | List registered exams (newest first); optional `?course_id=`. | `200` |
 | `POST` | `/grader/exams/{test_id}/submissions` | Enqueue grading for one student; returns a `job_id`. | `202` |
+| `GET`  | `/grader/jobs` | List jobs by `?student_id=` and/or `?test_id=` (≥1 required); lightweight summaries, no scorecard. | `200` |
 | `GET`  | `/grader/jobs/{job_id}` | Poll job status; the scorecard is present once `status == "succeeded"`. | `200` |
 | `GET`  | `/health`, `/health/ping` | Liveness (used by the Docker healthcheck). | `200` |
 
@@ -122,6 +125,7 @@ All settings load from `.env` via pydantic-settings (`app/core/config.py`). Sett
 | `USE_LOCAL_DB` | When `true`, routes all DB traffic to `LOCAL_DB_*` instead of the cloud host. |
 | `GEMINI_API_KEY` | Gemini (AI Studio) key; the grader's client also reads it from the environment. |
 | `GRADER_USE_VERTEX` | Route Gemini calls through Vertex AI (needed for the long ~150s OCR call). Honoured only when a Vertex service account is configured; otherwise falls back to `GEMINI_API_KEY`. |
+| `GRADER_ENABLE_SUMMARIES` | Generate the post-grade student/teacher/parent summaries (default `true`; set `false` to skip that extra Gemini call). |
 | `GOOGLE_APPLICATION_CREDENTIALS` / `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION` | Vertex AI service account + project. |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | Optional LLM tracing (both blank = disabled). |
 
@@ -134,7 +138,7 @@ pytest tests/                                   # full suite (unit + integration
 pytest tests/integration/test_grader_api.py     # grader HTTP contract
 ```
 
-`tests/` is the automated pytest suite (`asyncio_mode=auto`). `scripts/tests/grader/test_grader_handwritten_e2e.py` is a **manual** end-to-end smoke test that drives a running server through all four endpoints with a live LLM — run it directly with `python`, not pytest.
+`tests/` is the automated pytest suite (`asyncio_mode=auto`; the DB is mocked). `scripts/smoke_test_api.py` hits **every** endpoint against a running server (read-only, no LLM, no seeded data) — it's the gate the deploy runs on the freshly-built container and the release runbook runs before publishing; run it locally with `python scripts/smoke_test_api.py` (add `--deep` for one real graded run). `scripts/tests/grader/test_grader_handwritten_e2e.py` is a **manual** end-to-end test that drives a running server through register → submit → poll with a live LLM — run it directly with `python`, not pytest.
 
 ## Architecture
 
@@ -152,6 +156,8 @@ app/
                  tracing, prompts/*.txt
     grader_exam_service.py   exam registry + cached rubric
     grader_job_service.py    async job lifecycle + startup reaper
+    grader_prompts.py        exam-body → prompt-set selection (AP / IB / Cambridge)
+    grader_summaries.py      post-grade student/teacher/parent summaries
     health_service.py
   schemas/       grader_schema, health_schema, llm_schema
   core/          config, database singleton, course_config, observability, logging
