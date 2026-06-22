@@ -98,7 +98,7 @@ Routers are registered in `app/api/router.py` (everything under `/api/v1`). Only
 - **Handwritten:** answers PDF → rendered to images (`render_pdf_to_images`, PyMuPDF) → OCR'd with Gemini using the questions PDF as visual context (`ocr_submission`) → graded.
 - **Typed:** answers supplied inline as JSON → LLM-labelled by subpart against the rubric structure (`label_typed_answers`) → graded.
 
-Both then run `grade_submission` (Gemini against the rubric, with the per-course grading addendum), post-process (recover missing questions, flag low-confidence items), and persist a `GradedScorecardResponse`.
+Both then run `grade_submission` (Gemini against the rubric, with the per-course grading addendum), post-process (recover missing questions, flag low-confidence items), and persist a `GradedScorecardResponse`. After grading, an optional best-effort step (`grader_enable_summaries`, on by default) generates three role-tailored summaries — for the student, teacher, and parent — via `app/services/grader_summaries.py` and attaches them to the scorecard as `student_summary` / `teacher_summary` / `parent_summary` (one extra Gemini call, traced as `grader.summaries`).
 
 **Async job lifecycle (`app/services/grader_job_service.py`).** `create_job` inserts a `queued` row; grading runs in a FastAPI `BackgroundTask` capped by a module-level `asyncio.Semaphore` (`grader_max_concurrent_jobs`); clients poll `/grader/jobs/{job_id}`. A startup reaper (`reap_stale_jobs`, called from the `lifespan` in `app/main.py`) fails any job left `running` by a previous restart, since in-process BackgroundTasks don't survive a process exit.
 
@@ -110,7 +110,7 @@ Both then run `grade_submission` (Gemini against the rubric, with the per-course
 - `fetch.py` + `url_guard.py` — SSRF-guarded PDF fetch to a tempfile.
 - `response_builder.py` — `build_scorecard_response` composes the UI-complete response.
 - `tracing.py` — emits Langfuse generation spans for the grader's Gemini calls.
-- `prompts/*.txt` — shared `ocr.txt` / `segment_typed.txt`, plus a per-exam-body rubric+grade prompt set: AP (`rubric_extract.txt`, `grade_question.txt`), IB (`*_ib.txt`), Cambridge IGCSE/A-Level (`*_cambridge.txt`). `app/services/grader_prompts.py` picks the set by the course's `exam_body` (`College Board` → AP, `IBO` → IB, `Cambridge IGCSE/A-Level` → Cambridge; anything unknown → AP).
+- `prompts/*.txt` — shared `ocr.txt` / `segment_typed.txt`, plus a per-exam-body rubric+grade prompt set: AP (`rubric_extract.txt`, `grade_question.txt`), IB (`*_ib.txt`), Cambridge IGCSE/A-Level (`*_cambridge.txt`). `app/services/grader_prompts.py` picks the set by the course's `exam_body` (`College Board` → AP, `IBO` → IB, `Cambridge IGCSE/A-Level` → Cambridge; anything unknown → AP). Plus a board-agnostic `audience_summaries.txt` used by `app/services/grader_summaries.py` for the post-grade student/teacher/parent summaries.
 
 **LLM.** The grader calls Gemini directly via `app/services/grader/core.py::get_gemini_client`. When `grader_use_vertex=true` **and** a Vertex service account is configured (`GOOGLE_APPLICATION_CREDENTIALS` + `GOOGLE_CLOUD_PROJECT`), calls route through Vertex AI's global endpoint — necessary because the handwriting-OCR call routinely runs ~150s, exceeding AI Studio's server-side deadline (504). Otherwise it falls back to `GEMINI_API_KEY`. Default models are the `grader_*_model` settings in `app/core/config.py`.
 
