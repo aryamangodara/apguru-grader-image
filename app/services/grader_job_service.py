@@ -76,6 +76,10 @@ async def create_job(test_id: int, req: CreateSubmissionRequest) -> str:
     exam = await get_exam(test_id)
     if exam is None:
         raise LookupError(f"test_id {test_id} is not registered")
+    # issue #11: the exam must actually be registered *with a generated rubric*
+    # before we accept a submission to grade against it.
+    if not exam.get("rubric_json"):
+        raise LookupError(f"test_id {test_id} is registered but its rubric is not generated yet")
 
     is_handwritten = bool(exam["is_handwritten"])
     if is_handwritten and not req.answers_pdf_url:

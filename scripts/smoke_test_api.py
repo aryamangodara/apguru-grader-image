@@ -71,6 +71,22 @@ def _cases() -> list[Case]:
             422,
         ),
         (
+            # issue #11: a valid (typed) body with a non-existent test_id reaches
+            # assert_test_is_valid -> `tests` table lookup (DB) -> 400, before any
+            # write or Gemini call. Verifies that validation path on every deploy.
+            "register invalid test_id -> 400 [DB]",
+            "POST",
+            "/grader/register-exam",
+            {
+                "test_id": _UNREGISTERED_TEST_ID,
+                "course_id": "smoke",
+                "test_name": "smoke",
+                "is_handwritten": False,
+                "marking_scheme_pdf_url": "https://example.com/ms.pdf",
+            },
+            400,
+        ),
+        (
             "submit to unregistered test -> 404 [DB]",
             "POST",
             f"/grader/exams/{_UNREGISTERED_TEST_ID}/submissions",
