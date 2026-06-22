@@ -77,6 +77,11 @@ class Settings(BaseSettings):
     # service account is actually configured (GOOGLE_APPLICATION_CREDENTIALS +
     # GOOGLE_CLOUD_PROJECT); otherwise the grader falls back to the API key.
     grader_use_vertex: bool = Field(default=True)
+    # Post-grading audience summaries (issue #14): one extra structured Gemini call
+    # turns the scorecard into short student/teacher/parent summaries. On by default;
+    # set false to skip the call (and its per-grade cost/latency).
+    grader_enable_summaries: bool = Field(default=True)
+    grader_summaries_model: str = Field(default="gemini-3.5-flash")
 
     def _effective_db_params(
         self, specific_db: str | None = None

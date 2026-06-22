@@ -142,6 +142,22 @@ class GradedScorecardResponse(BaseModel):
     page_count: int | None = None
     questions: list[GradedQuestion] = Field(default_factory=list)
     unattempted: list[GradedQuestion] = Field(default_factory=list)
+    # issue #14: post-grading audience summaries (empty when disabled or on failure).
+    student_summary: str = Field(
+        default="",
+        description="Overall feedback addressed to the student (2-3 sentences): strengths, "
+        "where marks were lost, and next steps.",
+    )
+    teacher_summary: str = Field(
+        default="",
+        description="Overall summary for the teacher (2-3 sentences): performance level, "
+        "strengths, and gaps to reteach.",
+    )
+    parent_summary: str = Field(
+        default="",
+        description="Overall summary for the parent (2-3 sentences) in plain language: how "
+        "the student did and how to support.",
+    )
 
 
 # --- job polling ------------------------------------------------------------

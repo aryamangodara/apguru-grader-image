@@ -50,6 +50,7 @@ from app.services.grader.schemas import Scorecard
 from app.services.grader.tracing import gemini_generation_reporter
 from app.services.grader_exam_service import get_cached_rubric, get_exam
 from app.services.grader_prompts import grade_prompt_for
+from app.services.grader_summaries import build_summary_view, generate_audience_summaries
 
 log = structlog.get_logger(__name__)
 
@@ -215,6 +216,43 @@ async def run_grading_job(job_key: str) -> None:
             )
 
 
+async def _attach_summaries(
+    response: GradedScorecardResponse,
+    *,
+    client: Any,
+    subject: str,
+    exam_body: str | None,
+    job_key: str,
+) -> None:
+    """Generate and attach the three audience summaries (issue #14), best-effort.
+
+    Gated by ``settings.grader_enable_summaries``. The summaries are additive — a
+    failure is logged and leaves the fields empty but never fails the grade (the
+    scorecard is the primary deliverable). The blocking Gemini call is offloaded to a
+    thread and traced in Langfuse via ``gemini_generation_reporter`` (one
+    ``grader.summaries`` generation span, nested under the job's grade trace).
+    """
+    if not settings.grader_enable_summaries:
+        return
+    try:
+        summaries = await asyncio.to_thread(
+            generate_audience_summaries,
+            client,
+            subject=subject,
+            exam_body=exam_body,
+            scorecard_view=build_summary_view(response),
+            model=settings.grader_summaries_model,
+            on_response=gemini_generation_reporter(
+                "grader.summaries", settings.grader_summaries_model
+            ),
+        )
+        response.student_summary = summaries.student_summary
+        response.teacher_summary = summaries.teacher_summary
+        response.parent_summary = summaries.parent_summary
+    except Exception as exc:  # additive feature — never fail the grade on summaries
+        log.warning("grader_summaries_failed", job_key=job_key, error=str(exc))
+
+
 async def _do_grade(job_key: str) -> None:
     db = Database.get_instance()
     job = await db.query_one("SELECT * FROM grading_job WHERE job_key=:k", {"k": job_key})
@@ -289,6 +327,11 @@ async def _do_grade(job_key: str) -> None:
         page_count=page_count,
     )
     _record_job_output(scorecard)
+
+    # issue #14: attach best-effort, Langfuse-traced audience summaries to the scorecard.
+    await _attach_summaries(
+        response, client=client, subject=subject, exam_body=course.get("exam_body"), job_key=job_key
+    )
 
     await db.write(
         "UPDATE grading_job SET status='succeeded', scorecard_json=:s, review_required=:r, "
