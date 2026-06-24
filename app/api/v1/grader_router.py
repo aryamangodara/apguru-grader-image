@@ -19,6 +19,7 @@ group). The caller-supplied PDF URLs are SSRF-guarded in the fetch layer
 from fastapi import APIRouter, BackgroundTasks
 
 from app.controllers import grader_controller
+from app.core.errors import ErrorResponse
 from app.schemas.grader_schema import (
     CreateSubmissionRequest,
     CreateSubmissionResponse,
@@ -29,7 +30,15 @@ from app.schemas.grader_schema import (
     RegisterExamResponse,
 )
 
-router = APIRouter(prefix="/grader", tags=["Grader"])
+# Documents the {error_code, detail} error envelope on every grader route (see /docs).
+_ERROR_RESPONSES = {
+    400: {"model": ErrorResponse},
+    404: {"model": ErrorResponse},
+    405: {"model": ErrorResponse},
+    409: {"model": ErrorResponse},
+    422: {"model": ErrorResponse},
+}
+router = APIRouter(prefix="/grader", tags=["Grader"], responses=_ERROR_RESPONSES)
 
 
 @router.post("/register-exam", response_model=RegisterExamResponse, status_code=201)

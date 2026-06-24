@@ -18,6 +18,7 @@ from langfuse import observe
 from app.core.config import settings
 from app.core.course_config import get_course_config
 from app.core.database import Database
+from app.core.errors import InvalidPdfUrlError, InvalidTestError, UnknownCourseError
 from app.core.observability import set_observation_input, set_trace_attributes
 from app.schemas.grader_schema import ExamSummary, RegisterExamRequest, RegisterExamResponse
 from app.services.grader import (
@@ -42,12 +43,12 @@ async def get_exam(test_id: int) -> dict | None:
 
 
 async def assert_test_is_valid(test_id: int) -> None:
-    """Raise ``ValueError`` unless ``test_id`` is a live row in the ``tests`` table.
+    """Raise ``InvalidTestError`` unless ``test_id`` is a live row in the ``tests`` table.
 
     The ``tests`` table is owned by the main app in the shared DB; a test is
     "valid" when it exists and has not been soft-deleted (``deleted_at IS NULL``).
     Guards ``register_exam`` against parsing a rubric for a non-existent or
-    deleted test (issue #11). ``ValueError`` maps to HTTP 400 in the controller.
+    deleted test (issue #11). ``InvalidTestError`` → HTTP 400 (``INVALID_TEST_ID``).
     """
     db = Database.get_instance()
     row = await db.query_one(
@@ -55,7 +56,7 @@ async def assert_test_is_valid(test_id: int) -> None:
         {"test_id": test_id},
     )
     if row is None:
-        raise ValueError(f"test_id {test_id} is not a valid test (not found or deleted)")
+        raise InvalidTestError(f"test_id {test_id} is not a valid test (not found or deleted)")
 
 
 def get_cached_rubric(exam_row: dict) -> ParsedRubric:
@@ -92,7 +93,13 @@ async def list_exams(course_id: str | None = None) -> list[ExamSummary]:
 
     exams: list[ExamSummary] = []
     for row in rows:
-        course = await get_course_config(row["course_id"])
+        # A registered exam can outlive its course_config row; one stale course_id
+        # must not 400 the whole listing — fall back to the raw id as the subject.
+        try:
+            course = await get_course_config(row["course_id"])
+            subject = course.get("course_name") or row["course_id"]
+        except UnknownCourseError:
+            subject = str(row["course_id"])
         warnings = row["parse_warnings"]
         if isinstance(warnings, str):
             warnings = json.loads(warnings) if warnings else []
@@ -100,7 +107,7 @@ async def list_exams(course_id: str | None = None) -> list[ExamSummary]:
             ExamSummary(
                 test_id=row["test_id"],
                 course_id=row["course_id"],
-                subject=course.get("course_name") or row["course_id"],
+                subject=subject,
                 test_name=row["test_name"],
                 is_handwritten=bool(row["is_handwritten"]),
                 total_points=row["total_points"],
@@ -170,7 +177,12 @@ async def register_exam(req: RegisterExamRequest) -> RegisterExamResponse:
     # The vendored parse_rubric_pdf still takes year/set_label as LLM context: year
     # is unused post-refactor (pass 0); test_name flows in as the set label.
     client = get_gemini_client(prefer_vertex=settings.grader_use_vertex)
-    pdf_path = await fetch_pdf_to_tempfile(req.marking_scheme_pdf_url)
+    try:
+        pdf_path = await fetch_pdf_to_tempfile(req.marking_scheme_pdf_url)
+    except ValueError as exc:
+        # Translate the vendored SSRF/URL guard's ValueError into a typed, coded
+        # error at the app boundary (keeps grader/url_guard.py + fetch.py untouched).
+        raise InvalidPdfUrlError(str(exc)) from exc
     try:
         rubric = await asyncio.to_thread(
             parse_rubric_pdf,

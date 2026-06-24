@@ -16,6 +16,7 @@ CACHING:
 from typing import Any
 
 from app.core.database import Database
+from app.core.errors import UnknownCourseError
 
 # ─────────────────────────────────────────────
 # Async-compatible in-memory cache
@@ -40,7 +41,7 @@ async def get_course_config(course_id: int) -> dict[str, Any]:
         {"course_id": course_id},
     )
     if not row:
-        raise ValueError(f"Unknown course_id: {course_id}")
+        raise UnknownCourseError(f"Unknown course_id: {course_id}")
 
     _course_config_cache[course_id] = row
     return row
