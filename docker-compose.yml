@@ -2,6 +2,19 @@ services:
   app:
     build: .
     restart: unless-stopped
+    # Memory guardrail (2026-06-23 incident: an unbounded container OOM wedged the
+    # whole shared EC2 host). Cap this container's cgroup at 1 GiB so a grading-job
+    # spike (PDF render @ grader_ocr_dpi + concurrent Gemini OCR) is OOM-killed
+    # INSIDE this cgroup — the kernel kills the offending process here instead of the
+    # host running out of RAM and the global OOM killer picking a random victim.
+    # memswap_limit == mem_limit disables container swap, so 1g is a hard ceiling on
+    # real RAM and the kill is prompt. On OOM: gunicorn respawns the killed worker;
+    # if PID 1 (the gunicorn master) dies, `restart: unless-stopped` (above) restarts
+    # the container. mem_reservation is the soft target the kernel reclaims toward
+    # under host memory pressure, so the grader yields before the co-tenant worker.
+    mem_limit: 1g
+    memswap_limit: 1g
+    mem_reservation: 768m
     env_file:
       - .env
     # Bind address defaults to localhost (127.0.0.1) — the SECURE default: the
