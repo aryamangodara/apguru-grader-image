@@ -18,7 +18,7 @@ from langfuse import observe
 from app.core.config import settings
 from app.core.course_config import get_course_config
 from app.core.database import Database
-from app.core.errors import InvalidPdfUrlError, InvalidTestError
+from app.core.errors import InvalidPdfUrlError, InvalidTestError, UnknownCourseError
 from app.core.observability import set_observation_input, set_trace_attributes
 from app.schemas.grader_schema import ExamSummary, RegisterExamRequest, RegisterExamResponse
 from app.services.grader import (
@@ -93,7 +93,13 @@ async def list_exams(course_id: str | None = None) -> list[ExamSummary]:
 
     exams: list[ExamSummary] = []
     for row in rows:
-        course = await get_course_config(row["course_id"])
+        # A registered exam can outlive its course_config row; one stale course_id
+        # must not 400 the whole listing — fall back to the raw id as the subject.
+        try:
+            course = await get_course_config(row["course_id"])
+            subject = course.get("course_name") or row["course_id"]
+        except UnknownCourseError:
+            subject = str(row["course_id"])
         warnings = row["parse_warnings"]
         if isinstance(warnings, str):
             warnings = json.loads(warnings) if warnings else []
@@ -101,7 +107,7 @@ async def list_exams(course_id: str | None = None) -> list[ExamSummary]:
             ExamSummary(
                 test_id=row["test_id"],
                 course_id=row["course_id"],
-                subject=course.get("course_name") or row["course_id"],
+                subject=subject,
                 test_name=row["test_name"],
                 is_handwritten=bool(row["is_handwritten"]),
                 total_points=row["total_points"],

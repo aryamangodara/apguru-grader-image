@@ -1,4 +1,10 @@
-"""Thin controllers for the AP FRQ grader — translate service errors to HTTP."""
+"""Thin controllers for the AP FRQ grader.
+
+Orchestrate the services; domain failures raise typed ``GraderError``s (and the two
+job-lookup/filter checks below) that the central handler in ``app/core/errors.py``
+renders as the ``{error_code, detail}`` envelope — controllers no longer map errors
+to HTTP themselves.
+"""
 from __future__ import annotations
 
 from fastapi import BackgroundTasks

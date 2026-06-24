@@ -34,6 +34,7 @@ from app.schemas.grader_schema import (
 _ERROR_RESPONSES = {
     400: {"model": ErrorResponse},
     404: {"model": ErrorResponse},
+    405: {"model": ErrorResponse},
     409: {"model": ErrorResponse},
     422: {"model": ErrorResponse},
 }

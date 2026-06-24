@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.core.errors import InvalidTestError, RubricNotGeneratedError
+from app.core.errors import InvalidTestError, RubricNotGeneratedError, UnknownCourseError
 from app.schemas.grader_schema import CreateSubmissionRequest, RegisterExamRequest
 from app.services import grader_exam_service, grader_job_service
 
@@ -95,3 +95,25 @@ async def test_create_job_accepts_when_rubric_present():
         job_key = await grader_job_service.create_job(1, _typed_submission())
     assert isinstance(job_key, str) and job_key
     db.write.assert_awaited_once()
+
+
+# --- list_exams tolerates a stale course_config row --------------------------
+
+async def test_list_exams_tolerates_stale_course_config():
+    db = MagicMock()
+    db.query = AsyncMock(return_value=[{
+        "test_id": 555, "course_id": "999", "test_name": "X", "is_handwritten": 0,
+        "total_points": 10.0, "parse_warnings": "[]", "questions_pdf_url": None,
+        "marking_scheme_pdf_url": "https://x/ms.pdf", "rubric_parsed_at": None, "created_at": None,
+    }])
+    with (
+        patch.object(grader_exam_service.Database, "get_instance", return_value=db),
+        patch.object(
+            grader_exam_service,
+            "get_course_config",
+            new=AsyncMock(side_effect=UnknownCourseError("Unknown course_id: 999")),
+        ),
+    ):
+        exams = await grader_exam_service.list_exams()
+    assert len(exams) == 1
+    assert exams[0].subject == "999"  # fell back to the raw course_id instead of 400-ing the list

@@ -19,7 +19,7 @@ from app.core.errors import (
 
 
 def _app() -> FastAPI:
-    app = FastAPI()
+    app = FastAPI(debug=False)  # prod config: the catch-all 500 handler only runs when debug is off
     register_exception_handlers(app)
 
     @app.get("/not-registered")
@@ -82,6 +82,20 @@ async def test_unexpected_exception_is_500_and_hides_internals():
     body = resp.json()
     assert body["error_code"] == "INTERNAL_ERROR"
     assert "secret" not in str(body).lower()  # internals are not leaked to the client
+
+
+async def test_framework_404_unknown_path_gets_envelope():
+    async with _client(_app()) as c:
+        resp = await c.get("/no-such-path")
+    assert resp.status_code == 404
+    assert resp.json()["error_code"] == "NOT_FOUND"  # framework HTTPException, not a GraderError
+
+
+async def test_framework_405_wrong_method_gets_envelope():
+    async with _client(_app()) as c:
+        resp = await c.post("/not-registered")  # a GET-only route
+    assert resp.status_code == 405
+    assert resp.json()["error_code"] == "METHOD_NOT_ALLOWED"
 
 
 def test_typed_errors_carry_status_and_code():

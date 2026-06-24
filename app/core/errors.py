@@ -18,11 +18,12 @@ from enum import Enum
 from typing import Any
 
 import structlog
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 log = structlog.get_logger(__name__)
 
@@ -138,13 +139,18 @@ def register_exception_handlers(app: FastAPI) -> None:
         # makes it JSON-safe (an errors() entry's `ctx` can hold a raw exception object).
         return _envelope(422, ErrorCode.VALIDATION_ERROR, jsonable_encoder(exc.errors()))
 
-    @app.exception_handler(HTTPException)
-    async def _http_error(_request: Request, exc: HTTPException) -> JSONResponse:
+    # Register for Starlette's HTTPException (the base) so this also catches the
+    # framework-raised 404 (unknown path) / 405 (wrong method); fastapi.HTTPException
+    # is a subclass and registering for it would miss those.
+    @app.exception_handler(StarletteHTTPException)
+    async def _http_error(_request: Request, exc: StarletteHTTPException) -> JSONResponse:
         code = _STATUS_TO_CODE.get(exc.status_code, ErrorCode.INTERNAL_ERROR)
         return _envelope(exc.status_code, code, exc.detail)
 
     @app.exception_handler(Exception)
     async def _unhandled(_request: Request, exc: Exception) -> JSONResponse:
-        # Log the real cause; never leak internals/stack traces to the client.
+        # Log the real cause; never leak internals/stack traces to the client. NOTE: this
+        # only runs when the app is built with debug=False (prod sets DEBUG=False in .env);
+        # under debug=True Starlette renders its own traceback page instead (dev only).
         log.error("unhandled_exception", error=str(exc), exc_info=exc)
         return _envelope(500, ErrorCode.INTERNAL_ERROR, "Internal server error")
