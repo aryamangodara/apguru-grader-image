@@ -77,7 +77,7 @@ python scripts/tests/grader/test_grader_handwritten_e2e.py psychology # any seed
 **Layered request flow — each layer calls only the one below; never skip a layer:**
 
 1. **Router** (`app/api/v1/*_router.py`) — route definitions; `response_model=` on every route. No business logic, no SQL.
-2. **Controller** (`app/controllers/`) — orchestration; maps domain errors → HTTP status codes. No SQL.
+2. **Controller** (`app/controllers/`) — orchestration. No SQL, and no error→HTTP mapping: domain failures raise a typed `GraderError` (see **Error handling**) that the central handler renders.
 3. **Service** (`app/services/`) — business logic and LLM calls.
 4. **Persistence** — DB access via raw parameterized SQL through the `Database` singleton.
 
@@ -94,15 +94,17 @@ Routers are registered in `app/api/router.py` (everything under `/api/v1`). Only
 | `GET`  | `/api/v1/grader/jobs/{job_id}` | Poll job status; scorecard present once `status == "succeeded"`. → `200` |
 | `GET`  | `/api/v1/health`, `/api/v1/health/ping` | Liveness (used by the Docker healthcheck). |
 
+**Error handling — one machine-readable envelope (`app/core/errors.py`).** Every client-facing failure is rendered as a single shape — `{"error_code": "TEST_NOT_REGISTERED", "detail": "…"}` — by the handlers `register_exception_handlers` wires up in `create_app`. Domain failures raise a typed `GraderError` subclass that carries a stable `ErrorCode` **and** its HTTP status (`TestNotRegisteredError` → 404 `TEST_NOT_REGISTERED`, `RubricNotGeneratedError` → 409 `RUBRIC_NOT_GENERATED`, `InvalidTestError` → 400 `INVALID_TEST_ID`, `InvalidSubmissionError` / `InvalidPdfUrlError` / `UnknownCourseError` → 400, `JobNotFoundError` → 404, `MissingJobFilterError` → 400); FastAPI's own request-validation (422 `VALIDATION_ERROR`), bare HTTP 404/405, and any unhandled exception (500 `INTERNAL_ERROR`) get the same envelope. `detail` keeps its prior shape (a string, or the field-error list for 422), so the change is **additive** — consumers that already read `detail` are unaffected; it only ADDS `error_code`. The `ErrorResponse` model documents the codes in OpenAPI (`/docs`). To add a failure mode, raise a `GraderError` subclass (define a new `ErrorCode` if needed) — never map errors to HTTP in a controller.
+
 **Two grading modes.**
 - **Handwritten:** answers PDF → rendered to images (`render_pdf_to_images`, PyMuPDF) → OCR'd with Gemini using the questions PDF as visual context (`ocr_submission`) → graded.
 - **Typed:** answers supplied inline as JSON → LLM-labelled by subpart against the rubric structure (`label_typed_answers`) → graded.
 
 Both then run `grade_submission` (Gemini against the rubric, with the per-course grading addendum), post-process (recover missing questions, flag low-confidence items), and persist a `GradedScorecardResponse`. After grading, an optional best-effort step (`grader_enable_summaries`, on by default) generates three role-tailored summaries — for the student, teacher, and parent — via `app/services/grader_summaries.py` and attaches them to the scorecard as `student_summary` / `teacher_summary` / `parent_summary` (one extra Gemini call, traced as `grader.summaries`).
 
-**Async job lifecycle (`app/services/grader_job_service.py`).** `create_job` inserts a `queued` row; grading runs in a FastAPI `BackgroundTask` capped by a module-level `asyncio.Semaphore` (`grader_max_concurrent_jobs`); clients poll `/grader/jobs/{job_id}`. A startup reaper (`reap_stale_jobs`, called from the `lifespan` in `app/main.py`) fails any job left `running` by a previous restart, since in-process BackgroundTasks don't survive a process exit.
+**Async job lifecycle (`app/services/grader_job_service.py`).** `create_job` first gates the submission — the exam must be registered (`TEST_NOT_REGISTERED`), its rubric already parsed (`RUBRIC_NOT_GENERATED`), and the body must carry `answers_pdf_url` for handwritten or `answers` for typed (`INVALID_SUBMISSION`) — then inserts a `queued` row; grading runs in a FastAPI `BackgroundTask` capped by a module-level `asyncio.Semaphore` (`grader_max_concurrent_jobs`); clients poll `/grader/jobs/{job_id}`. A startup reaper (`reap_stale_jobs`, called from the `lifespan` in `app/main.py`) fails any job left `running` by a previous restart, since in-process BackgroundTasks don't survive a process exit.
 
-**Exam registry & rubric cache (`app/services/grader_exam_service.py`).** `register_exam` parses the marking-scheme PDF once (`parse_rubric_pdf`) and stores the `ParsedRubric` JSON in `ap_exam.rubric_json`; subsequent students reuse it.
+**Exam registry & rubric cache (`app/services/grader_exam_service.py`).** `register_exam` parses the marking-scheme PDF once (`parse_rubric_pdf`) and stores the `ParsedRubric` JSON in `ap_exam.rubric_json`; subsequent students reuse it. Before parsing it rejects a `test_id` that isn't a live row in the main app's `tests` table (`assert_test_is_valid` → `INVALID_TEST_ID`, issue #11).
 
 **Grader pipeline package (`app/services/grader/`).** Self-contained, imports almost nothing from the rest of `app`:
 - `core.py` — `get_gemini_client`, `render_pdf_to_images`, `ocr_submission`, `parse_rubric_pdf`, `grade_submission`, `label_typed_answers`. **Ships its own Gemini client** (it does NOT use a shared LLM abstraction).
@@ -116,7 +118,7 @@ Both then run `grade_submission` (Gemini against the rubric, with the per-course
 
 **LLM cost — reduce it where possible, track it in Langfuse.** One graded submission fans out into several Gemini calls (handwritten OCR, rubric parse [once per exam, then cached], per-question grading, typed-answer labelling, and the post-grade audience summaries), so spend adds up fast. Treat lowering LLM cost as an ongoing goal whenever you touch the pipeline: prefer the cheapest model that holds quality (the `grader_*_model` settings), avoid redundant calls (the rubric is cached per exam; summaries are gated by `grader_enable_summaries`), keep prompts and per-call inputs compact, and don't add an LLM call where already-computed data suffices. Every call emits a `grader.*` Langfuse generation span (via `gemini_generation_reporter`) carrying model + token usage + cost — **use Langfuse to find the expensive calls and to confirm a change actually lowers spend**, not just to debug.
 
-**Cross-cutting (`app/core/`).** `config.py` (pydantic-settings; required fields use `Field(...)` to fail fast), `database.py` (the `Database` singleton), `course_config.py` (per-course config incl. `get_grading_addendum` / `get_ocr_addendum`), `observability.py` + `logging.py` (structlog + optional Langfuse). `app/middleware/request_logging.py` stamps every log line with a `request_id`. Startup/shutdown (Langfuse init, DB connect, reaper) run in the `lifespan` block in `app/main.py`.
+**Cross-cutting (`app/core/`).** `config.py` (pydantic-settings; required fields use `Field(...)` to fail fast), `database.py` (the `Database` singleton), `course_config.py` (per-course config incl. `get_grading_addendum` / `get_ocr_addendum`), `errors.py` (the typed `GraderError` hierarchy + the `{error_code, detail}` exception handlers), `observability.py` + `logging.py` (structlog + optional Langfuse). `app/middleware/request_logging.py` stamps every log line with a `request_id`. Startup/shutdown (Langfuse init, DB connect, reaper) run in the `lifespan` block in `app/main.py`.
 
 ## Database
 
@@ -144,6 +146,7 @@ Both then run `grade_submission` (Gemini against the rubric, with the per-course
 | Service | `app/services/{feature}_service.py` | called by controller |
 | Persistence | through the `Database` singleton (raw parameterized SQL) | called by service |
 | Schemas | `app/schemas/{feature}_schema.py` | router + controller |
+| Domain error / new error code | `app/core/errors.py` — subclass `GraderError`, add an `ErrorCode` | handlers registered in `create_app` auto-render it |
 | Grader pipeline primitive | `app/services/grader/` (`core.py` / `schemas.py` / …) | re-exported via `app/services/grader/__init__.py` |
 | Grader prompt | `app/services/grader/prompts/*.txt` | loaded by the grader package |
 | DB migration / course seed | the central `apguru-centralized-alembic` repo (PR there) | applied by its CI/CD on merge |

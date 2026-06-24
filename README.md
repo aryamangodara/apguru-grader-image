@@ -115,6 +115,29 @@ curl localhost:8080/api/v1/grader/jobs/<job_id>
 # → 200 {"job_id": "…", "test_id": 555, "student_id": 7, "status": "succeeded", "scorecard": { … }}
 ```
 
+### Errors
+
+Every failure returns one envelope — a stable, machine-readable `error_code` plus a human-readable `detail` — so clients can branch on the code instead of parsing messages:
+
+```json
+{ "error_code": "RUBRIC_NOT_GENERATED", "detail": "test_id 555 is registered but its rubric is not generated yet" }
+```
+
+| HTTP | `error_code` | When |
+|---|---|---|
+| 400 | `INVALID_TEST_ID` | `test_id` isn't a live test in the main app's `tests` table. |
+| 400 | `INVALID_SUBMISSION` | Missing `answers_pdf_url` (handwritten) or `answers` (typed). |
+| 400 | `INVALID_PDF_URL` | A supplied PDF URL failed the SSRF / URL guard. |
+| 400 | `UNKNOWN_COURSE` | `course_id` has no `course_configs` row. |
+| 400 | `MISSING_JOB_FILTER` | `GET /grader/jobs` with neither `student_id` nor `test_id`. |
+| 404 | `TEST_NOT_REGISTERED` | Submitting to a `test_id` that was never registered. |
+| 404 | `JOB_NOT_FOUND` | Polling an unknown `job_id`. |
+| 409 | `RUBRIC_NOT_GENERATED` | The exam is registered but its rubric hasn't been parsed yet. |
+| 422 | `VALIDATION_ERROR` | Request-body validation failed (`detail` is FastAPI's field-error list). |
+| 500 | `INTERNAL_ERROR` | Unexpected server error (no internals leaked). |
+
+A bare framework 404 / 405 (unknown path, wrong method) uses the same envelope with `NOT_FOUND` / `METHOD_NOT_ALLOWED`. `detail` is unchanged from before — the envelope only **adds** `error_code`. The full list lives in [`app/core/errors.py`](app/core/errors.py) and is documented in the OpenAPI schema at `/docs`.
+
 ## Configuration
 
 All settings load from `.env` via pydantic-settings (`app/core/config.py`). Settings without defaults fail fast at startup if missing. Start from [`.env.example`](.env.example).
@@ -160,7 +183,8 @@ app/
     grader_summaries.py      post-grade student/teacher/parent summaries
     health_service.py
   schemas/       grader_schema, health_schema, llm_schema
-  core/          config, database singleton, course_config, observability, logging
+  core/          config, database singleton, course_config, errors (typed
+                 GraderError + {error_code, detail} handlers), observability, logging
   middleware/    request-logging middleware (request_id correlation)
 nginx/           reverse-proxy config for the Docker stack
 docs/            grader-ec2-deployment.md
