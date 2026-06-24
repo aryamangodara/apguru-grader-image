@@ -150,3 +150,47 @@ OCR uses `gemini-3.1-pro-preview` on Vertex (~150–160s for a ~7-page handwritt
 submission). `grader_max_concurrent_jobs` (default 2) caps in-flight grades; excess
 jobs queue. The build runs **on the host**, so size the instance for occasional
 build spikes plus the Vertex quota.
+
+## Memory guardrail
+
+The shared host is RAM-constrained (a co-tenant worker uses ~1.5 GiB), so the grader
+container is **capped at 1 GiB** in [`docker-compose.yml`](../docker-compose.yml)
+(`mem_limit: 1g`; `memswap_limit: 1g` → no swap, so 1 GiB is a hard real-RAM ceiling;
+`mem_reservation: 768m` → the soft target the kernel reclaims toward under host memory
+pressure). This **contains an OOM to the grader's own cgroup**: when a grading-job spike
+(PDF render @ `grader_ocr_dpi` + concurrent Gemini OCR) exceeds 1 GiB, the kernel kills
+the offending process *inside this container* instead of the host running out of RAM and
+the global OOM killer wedging the whole box (the 2026-06-23 incident).
+
+**On OOM:** gunicorn respawns the killed worker (the container stays up); if PID 1 (the
+gunicorn master) is killed, the container exits 137 and `restart: unless-stopped`
+restarts it, returning healthy within the healthcheck `start_period`. gunicorn also
+recycles each worker after ~200 requests (`max_requests` in
+[`gunicorn.conf.py`](../gunicorn.conf.py)) so a long-lived worker's RSS can't creep
+toward the cap.
+
+**Inspect an OOM event / confirm the limits:**
+```bash
+docker inspect -f '{{.State.OOMKilled}} restarts={{.RestartCount}}' apguru-grader-app-1
+docker inspect -f '{{.HostConfig.Memory}} {{.HostConfig.MemorySwap}} {{.HostConfig.MemoryReservation}}' apguru-grader-app-1
+# → 1073741824 1073741824 805306368
+docker stats --no-stream apguru-grader-app-1   # MEM USAGE / LIMIT vs 1GiB
+```
+
+**Apply the cap live, without a release** — the `docker compose` config change otherwise
+ships on the next release-gated `--build` deploy (and the `gunicorn` `max_requests`
+change needs that rebuild):
+```bash
+docker update --memory 1g --memory-swap 1g --memory-reservation 768m apguru-grader-app-1
+```
+
+**If OOM-kills get frequent** (watch `docker stats`), the cheapest relief, in order:
+lower `grader_ocr_dpi` (300→200 cuts render memory ~55%), set `GUNICORN_WORKERS=1`
+(halves baseline RSS — the app is async and capped by `grader_max_concurrent_jobs`), or
+lower `grader_max_concurrent_jobs` (2→1).
+
+> **Host caveat:** `worker (~1.5 GiB) + grader (1 GiB) > 1.9 GiB` on a t3.small, so the
+> 1 GiB cap bounds the *grader* but does not by itself guarantee the host never OOMs if
+> both peak together. For full host safety, also cap the co-tenant worker the same way
+> and/or upsize to t3.medium (4 GiB), and add a CloudWatch `StatusCheckFailed_Instance`
+> alarm.
