@@ -1,8 +1,9 @@
 """Thin controllers for the AP FRQ grader — translate service errors to HTTP."""
 from __future__ import annotations
 
-from fastapi import BackgroundTasks, HTTPException
+from fastapi import BackgroundTasks
 
+from app.core.errors import JobNotFoundError, MissingJobFilterError
 from app.schemas.grader_schema import (
     CreateSubmissionRequest,
     CreateSubmissionResponse,
@@ -16,10 +17,9 @@ from app.services import grader_exam_service, grader_job_service
 
 
 async def register_exam(body: RegisterExamRequest) -> RegisterExamResponse:
-    try:
-        return await grader_exam_service.register_exam(body)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # Domain errors (InvalidTestError / UnknownCourseError / InvalidPdfUrlError) are
+    # raised by the service and rendered by the central handler (app/core/errors.py).
+    return await grader_exam_service.register_exam(body)
 
 
 async def create_submission(
@@ -27,13 +27,9 @@ async def create_submission(
     body: CreateSubmissionRequest,
     background_tasks: BackgroundTasks,
 ) -> CreateSubmissionResponse:
-    try:
-        job_key = await grader_job_service.create_job(test_id, body)
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
+    # TestNotRegisteredError (404) / RubricNotGeneratedError (409) /
+    # InvalidSubmissionError (400) propagate to the central exception handler.
+    job_key = await grader_job_service.create_job(test_id, body)
     background_tasks.add_task(grader_job_service.run_grading_job, job_key)
     return CreateSubmissionResponse(job_id=job_key, status="queued")
 
@@ -41,7 +37,7 @@ async def create_submission(
 async def get_job(job_id: str) -> GradingJobResponse:
     job = await grader_job_service.get_job(job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail=f"unknown job_id {job_id!r}")
+        raise JobNotFoundError(f"unknown job_id {job_id!r}")
     return job
 
 
@@ -49,10 +45,7 @@ async def list_jobs(
     student_id: int | None = None, test_id: int | None = None
 ) -> JobListResponse:
     if student_id is None and test_id is None:
-        raise HTTPException(
-            status_code=400,
-            detail="provide at least one of student_id or test_id",
-        )
+        raise MissingJobFilterError("provide at least one of student_id or test_id")
     jobs = await grader_job_service.list_jobs(student_id=student_id, test_id=test_id)
     return JobListResponse(count=len(jobs), jobs=jobs)
 

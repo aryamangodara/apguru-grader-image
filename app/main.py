@@ -11,6 +11,7 @@ load_dotenv()
 from app.core.config import settings
 from app.core.database import Database
 from app.core.logging import setup_logging
+from app.core.errors import register_exception_handlers
 from app.core.observability import configure_langfuse, shutdown_langfuse
 from app.api.router import api_router
 from app.middleware.request_logging import RequestLoggingMiddleware
@@ -61,6 +62,9 @@ def create_app() -> FastAPI:
         debug=settings.debug,
         lifespan=lifespan,
     )
+
+    # Render every error as a consistent {error_code, detail} envelope.
+    register_exception_handlers(app)
 
     # Configure CORS
     app.add_middleware(

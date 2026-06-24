@@ -27,6 +27,11 @@ from app.core.course_config import (
     get_ocr_addendum,
 )
 from app.core.database import Database
+from app.core.errors import (
+    InvalidSubmissionError,
+    RubricNotGeneratedError,
+    TestNotRegisteredError,
+)
 from app.core.observability import record_trace_output, set_trace_attributes
 from app.schemas.grader_schema import (
     CreateSubmissionRequest,
@@ -71,22 +76,23 @@ def _iso(value: Any) -> str | None:
 async def create_job(test_id: int, req: CreateSubmissionRequest) -> str:
     """Insert a queued grading_job for one student submission; return its job_key.
 
-    Fails with ``LookupError`` (→ 404) when no exam is registered for ``test_id``.
+    Raises ``TestNotRegisteredError`` (404) / ``RubricNotGeneratedError`` (409) /
+    ``InvalidSubmissionError`` (400), each rendered as ``{error_code, detail}``.
     """
     db = Database.get_instance()
     exam = await get_exam(test_id)
     if exam is None:
-        raise LookupError(f"test_id {test_id} is not registered")
+        raise TestNotRegisteredError(f"test_id {test_id} is not registered")
     # issue #11: the exam must actually be registered *with a generated rubric*
     # before we accept a submission to grade against it.
     if not exam.get("rubric_json"):
-        raise LookupError(f"test_id {test_id} is registered but its rubric is not generated yet")
+        raise RubricNotGeneratedError(f"test_id {test_id} is registered but its rubric is not generated yet")
 
     is_handwritten = bool(exam["is_handwritten"])
     if is_handwritten and not req.answers_pdf_url:
-        raise ValueError("answers_pdf_url is required for handwritten exams")
+        raise InvalidSubmissionError("answers_pdf_url is required for handwritten exams")
     if not is_handwritten and not req.answers:
-        raise ValueError("answers is required for typed exams")
+        raise InvalidSubmissionError("answers is required for typed exams")
 
     job_key = uuid.uuid4().hex
     await db.write(

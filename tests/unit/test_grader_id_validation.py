@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.core.errors import InvalidTestError, RubricNotGeneratedError
 from app.schemas.grader_schema import CreateSubmissionRequest, RegisterExamRequest
 from app.services import grader_exam_service, grader_job_service
 
@@ -22,7 +23,7 @@ async def test_assert_test_is_valid_rejects_unknown_or_deleted_test():
     db.query_one = AsyncMock(return_value=None)  # no live `tests` row
     with (
         patch.object(grader_exam_service.Database, "get_instance", return_value=db),
-        pytest.raises(ValueError, match="not a valid test"),
+        pytest.raises(InvalidTestError, match="not a valid test"),
     ):
         await grader_exam_service.assert_test_is_valid(999)
 
@@ -55,7 +56,7 @@ async def test_register_exam_rejects_invalid_test_id_before_parsing():
         patch.object(grader_exam_service, "get_gemini_client") as mock_client,
         patch.object(grader_exam_service, "fetch_pdf_to_tempfile", new=AsyncMock()) as mock_fetch,
         patch.object(grader_exam_service, "parse_rubric_pdf") as mock_parse,
-        pytest.raises(ValueError, match="not a valid test"),
+        pytest.raises(InvalidTestError, match="not a valid test"),
     ):
         await grader_exam_service.register_exam(req)
     # Fail-fast: the validation runs before any PDF fetch or Gemini call.
@@ -77,7 +78,7 @@ async def test_create_job_rejects_when_rubric_not_generated():
     with (
         patch.object(grader_job_service.Database, "get_instance", return_value=db),
         patch.object(grader_job_service, "get_exam", new=AsyncMock(return_value=exam_row)),
-        pytest.raises(LookupError, match="rubric is not generated"),
+        pytest.raises(RubricNotGeneratedError, match="rubric is not generated"),
     ):
         await grader_job_service.create_job(1, _typed_submission())
     db.write.assert_not_called()  # nothing enqueued

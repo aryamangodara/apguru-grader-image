@@ -7,6 +7,7 @@ is mocked — these assert the HTTP surface, not grading.
 """
 from unittest.mock import AsyncMock, patch
 
+from app.core.errors import InvalidSubmissionError, TestNotRegisteredError
 from app.schemas.grader_schema import (
     ExamSummary,
     GradingJobResponse,
@@ -74,7 +75,7 @@ async def test_submission_unregistered_test_returns_404(client):
     with (
         patch(
             "app.services.grader_job_service.create_job",
-            new=AsyncMock(side_effect=LookupError("test_id 999 is not registered")),
+            new=AsyncMock(side_effect=TestNotRegisteredError("test_id 999 is not registered")),
         ),
         patch("app.services.grader_job_service.run_grading_job", new=AsyncMock()),
     ):
@@ -83,7 +84,9 @@ async def test_submission_unregistered_test_returns_404(client):
             json={"student_id": 1, "answers": {"1": "a"}},
         )
     assert resp.status_code == 404
-    assert "not registered" in resp.json()["detail"]
+    body = resp.json()
+    assert body["error_code"] == "TEST_NOT_REGISTERED"  # consumers branch on this
+    assert "not registered" in body["detail"]
 
 
 async def test_submission_typed_inline_enqueues(client):
@@ -110,7 +113,7 @@ async def test_submission_typed_missing_answers_returns_400(client):
     with (
         patch(
             "app.services.grader_job_service.create_job",
-            new=AsyncMock(side_effect=ValueError("answers is required for typed exams")),
+            new=AsyncMock(side_effect=InvalidSubmissionError("answers is required for typed exams")),
         ),
         patch("app.services.grader_job_service.run_grading_job", new=AsyncMock()),
     ):
@@ -119,6 +122,7 @@ async def test_submission_typed_missing_answers_returns_400(client):
             json={"student_id": 7},
         )
     assert resp.status_code == 400
+    assert resp.json()["error_code"] == "INVALID_SUBMISSION"
 
 
 async def test_get_job_returns_test_id(client):
