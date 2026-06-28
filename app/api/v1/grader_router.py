@@ -16,7 +16,9 @@ returned scorecards must be restricted at the edge (ALB / Nginx / WAF / security
 group). The caller-supplied PDF URLs are SSRF-guarded in the fetch layer
 (``app/services/grader/url_guard.py``).
 """
-from fastapi import APIRouter, BackgroundTasks
+from typing import Annotated
+
+from fastapi import APIRouter, BackgroundTasks, Path, Query
 
 from app.controllers import grader_controller
 from app.core.errors import ErrorResponse
@@ -41,14 +43,23 @@ _ERROR_RESPONSES = {
 router = APIRouter(prefix="/grader", tags=["Grader"], responses=_ERROR_RESPONSES)
 
 
-@router.post("/register-exam", response_model=RegisterExamResponse, status_code=201)
+@router.post(
+    "/register-exam",
+    response_model=RegisterExamResponse,
+    status_code=201,
+    summary="Register an exam & cache its rubric",
+)
 async def register_exam(body: RegisterExamRequest) -> RegisterExamResponse:
     """Register an exam and parse + cache its rubric (idempotent — reused per student)."""
     return await grader_controller.register_exam(body)
 
 
-@router.get("/exams", response_model=ExamListResponse)
-async def list_exams(course_id: str | None = None) -> ExamListResponse:
+@router.get("/exams", response_model=ExamListResponse, summary="List registered exams")
+async def list_exams(
+    course_id: Annotated[
+        str | None, Query(description="Filter to exams in this course_configs.course_id.")
+    ] = None,
+) -> ExamListResponse:
     """List all registered exams (newest first); optional ?course_id= filter."""
     return await grader_controller.list_exams(course_id)
 
@@ -57,9 +68,10 @@ async def list_exams(course_id: str | None = None) -> ExamListResponse:
     "/exams/{test_id}/submissions",
     response_model=CreateSubmissionResponse,
     status_code=202,
+    summary="Enqueue grading for a student",
 )
 async def create_submission(
-    test_id: int,
+    test_id: Annotated[int, Path(description="tests.id of the registered exam to grade against.")],
     body: CreateSubmissionRequest,
     background_tasks: BackgroundTasks,
 ) -> CreateSubmissionResponse:
@@ -67,9 +79,14 @@ async def create_submission(
     return await grader_controller.create_submission(test_id, body, background_tasks)
 
 
-@router.get("/jobs", response_model=JobListResponse)
+@router.get("/jobs", response_model=JobListResponse, summary="List grading jobs")
 async def list_jobs(
-    student_id: int | None = None, test_id: int | None = None
+    student_id: Annotated[
+        int | None, Query(description="Filter to this student's jobs (>=1 of student_id/test_id required).")
+    ] = None,
+    test_id: Annotated[
+        int | None, Query(description="Filter to jobs for this tests.id (>=1 of student_id/test_id required).")
+    ] = None,
 ) -> JobListResponse:
     """List grading jobs by ?student_id= and/or ?test_id= (newest first).
 
@@ -79,7 +96,9 @@ async def list_jobs(
     return await grader_controller.list_jobs(student_id, test_id)
 
 
-@router.get("/jobs/{job_id}", response_model=GradingJobResponse)
-async def get_job(job_id: str) -> GradingJobResponse:
+@router.get("/jobs/{job_id}", response_model=GradingJobResponse, summary="Poll a grading job")
+async def get_job(
+    job_id: Annotated[str, Path(description="The job_id returned when the submission was enqueued.")],
+) -> GradingJobResponse:
     """Poll a grading job; the scorecard is present once status == 'succeeded'."""
     return await grader_controller.get_job(job_id)

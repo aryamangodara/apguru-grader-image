@@ -8,7 +8,7 @@ router = APIRouter(
     tags=["Health"]
 )
 
-@router.get("", response_model=HealthResponse)
+@router.get("", response_model=HealthResponse, summary="Health check")
 def health_check():
     """
     API endpoint to check if the service is running.
@@ -16,7 +16,7 @@ def health_check():
     """
     return health_controller.get_health_status()
 
-@router.get("/ping", response_model=HealthResponse)
+@router.get("/ping", response_model=HealthResponse, summary="Ping")
 def ping():
     """
     Simple ping endpoint.
