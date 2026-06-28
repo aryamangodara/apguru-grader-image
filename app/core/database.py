@@ -1,5 +1,5 @@
 import time
-from typing import Any
+from typing import Any, ClassVar
 
 import structlog
 from sqlalchemy import event, text
@@ -52,7 +52,7 @@ class Database:
             await session.execute(text("DELETE FROM tokens WHERE user_id = :id"), {"id": 5})
     """
 
-    _instances: dict[str, "Database"] = {}
+    _instances: ClassVar[dict[str, "Database"]] = {}
 
     def __init__(self, db_name: str | None = None, url: str | None = None) -> None:
         if url is not None:
@@ -134,7 +134,7 @@ class Database:
         async with self._engine.connect() as conn:
             result = await conn.execute(text(sql), params or {})
             columns = list(result.keys())
-            rows = [dict(zip(columns, row)) for row in result.fetchall()]
+            rows = [dict(zip(columns, row, strict=True)) for row in result.fetchall()]
             await conn.commit()
             return rows
 

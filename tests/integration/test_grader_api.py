@@ -19,17 +19,17 @@ REGISTER_PATH = "/api/v1/grader/register-exam"
 
 
 def _register_response(**overrides) -> RegisterExamResponse:
-    base = dict(
-        test_id=555,
-        course_id="14",
-        subject="AP Biology",
-        test_name="March 2024",
-        is_handwritten=False,
-        total_points=10.0,
-        question_count=4,
-        parse_warnings=[],
-        cached=False,
-    )
+    base = {
+        "test_id": 555,
+        "course_id": "14",
+        "subject": "AP Biology",
+        "test_name": "March 2024",
+        "is_handwritten": False,
+        "total_points": 10.0,
+        "question_count": 4,
+        "parse_warnings": [],
+        "cached": False,
+    }
     base.update(overrides)
     return RegisterExamResponse(**base)
 

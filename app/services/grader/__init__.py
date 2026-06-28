@@ -36,7 +36,7 @@ RUBRIC_PROMPT = PROMPTS_DIR / "rubric_extract.txt"
 GRADE_PROMPT = PROMPTS_DIR / "grade_question.txt"
 SEGMENT_TYPED_PROMPT = PROMPTS_DIR / "segment_typed.txt"
 
-__all__ = [
+__all__ = [  # noqa: RUF022 — grouped by category & pipeline order, not alphabetical
     # pipeline primitives
     "get_gemini_client",
     "render_pdf_to_images",

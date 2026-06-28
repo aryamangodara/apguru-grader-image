@@ -1,6 +1,6 @@
 def check_health() -> dict:
     """
-    Service layer for checking health. 
+    Service layer for checking health.
     Can include DB pings, Redis checks, etc.
     """
     # Simply returning a dictionary representing the core business logic state

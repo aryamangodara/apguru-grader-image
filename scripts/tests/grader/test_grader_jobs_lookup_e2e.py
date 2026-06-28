@@ -41,7 +41,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
 
@@ -79,7 +79,7 @@ _CHECKS: list[tuple[str, bool, str]] = []
 # --- logging helpers ---------------------------------------------------------
 
 def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%H:%M:%S")
+    return datetime.now(UTC).strftime("%H:%M:%S")
 
 
 def log(msg: str = "") -> None:

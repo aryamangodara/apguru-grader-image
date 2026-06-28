@@ -58,7 +58,7 @@ def test_rejects_loopback(monkeypatch):
 
 def test_rejects_private_resolved_host(monkeypatch):
     _patch_dns(monkeypatch, {"internal.example.com": "10.0.0.5"})
-    with pytest.raises(ValueError, match="10.0.0.5"):
+    with pytest.raises(ValueError, match=r"10\.0\.0\.5"):
         url_guard.validate_public_http_url("https://internal.example.com/x.pdf")
 
 

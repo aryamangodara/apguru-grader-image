@@ -1,4 +1,5 @@
 import logging
+
 import structlog
 
 from app.core.config import settings
@@ -17,10 +18,7 @@ def setup_logging() -> None:
         structlog.processors.format_exc_info,
     ]
 
-    if settings.debug:
-        renderer = structlog.dev.ConsoleRenderer()
-    else:
-        renderer = structlog.processors.JSONRenderer()
+    renderer = structlog.dev.ConsoleRenderer() if settings.debug else structlog.processors.JSONRenderer()
 
     # Configure structlog-native loggers
     structlog.configure(
