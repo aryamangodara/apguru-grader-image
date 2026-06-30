@@ -84,7 +84,7 @@ def check_branch_and_sync(root: Path) -> None:
     if code != 0:
         record(WARN, "could not compare with origin/main", out.strip())
         return
-    ahead, behind = (out.split() + ["0", "0"])[:2]
+    ahead, behind = ([*out.split(), "0", "0"])[:2]
     if behind != "0":
         record(FAIL, f"HEAD is {behind} commit(s) behind origin/main",
                "Run `git pull` - the deploy ships what's on origin/main.")

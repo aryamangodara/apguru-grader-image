@@ -117,7 +117,7 @@ def _request(method: str, url: str, body: dict | None, timeout: float) -> int:
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 (fixed scheme, our URL)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.status
     except urllib.error.HTTPError as exc:
         return exc.code

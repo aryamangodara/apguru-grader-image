@@ -1,0 +1,42 @@
+name: CI
+
+# Quality gate for pull requests. Unlike deploy.yml (release-gated, self-hosted on the EC2
+# host), this runs on GitHub-hosted runners and never touches prod — it only gives the
+# reviewer an automated green/red signal before merging to the branch-protected main.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]  # post-merge signal + warms the pip cache that PR runs restore
+
+concurrency:
+  # One run per branch/PR; cancel superseded runs so a force-push doesn't pile up jobs.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest  # GitHub-hosted — do NOT pin to the self-hosted EC2 runner
+    steps:
+      - uses: actions/checkout@v5  # v5 (Node 24), matching deploy.yml
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"  # matches the Dockerfile prod base image
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        # requirements-dev.txt pins ruff==0.15.12 and pulls in requirements.txt, so CI
+        # lints/tests with the exact toolchain the maintainer runs locally.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Ruff lint
+        # --output-format=github annotates offending lines inline on the PR's Files tab.
+        run: ruff check --output-format=github .
+
+      - name: Pytest
+        run: pytest tests/ -q

@@ -14,7 +14,7 @@ this only ADDS ``error_code``.
 """
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import structlog
@@ -28,7 +28,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 log = structlog.get_logger(__name__)
 
 
-class ErrorCode(str, Enum):
+class ErrorCode(StrEnum):
     """Stable, machine-readable error codes returned in every error response."""
 
     # Domain errors

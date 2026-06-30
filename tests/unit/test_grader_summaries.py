@@ -73,7 +73,9 @@ def test_generate_audience_summaries_returns_three_fields_and_forwards_tracing(m
         on_response=on_resp,
     )
 
-    assert out.student_summary and out.teacher_summary and out.parent_summary
+    assert out.student_summary
+    assert out.teacher_summary
+    assert out.parent_summary
     _, kwargs = mock_call.call_args
     assert kwargs["on_response"] is on_resp  # Langfuse hook forwarded — traceability guard
     assert kwargs["config"].response_schema is AudienceSummaries
@@ -98,7 +100,9 @@ async def test_attach_summaries_skips_when_disabled(monkeypatch):
     await grader_job_service._attach_summaries(resp, client=MagicMock(), subject="x", exam_body=None, job_key="j")
 
     called.assert_not_called()
-    assert resp.student_summary == "" and resp.teacher_summary == "" and resp.parent_summary == ""
+    assert resp.student_summary == ""
+    assert resp.teacher_summary == ""
+    assert resp.parent_summary == ""
 
 
 async def test_attach_summaries_sets_fields_when_enabled(monkeypatch):

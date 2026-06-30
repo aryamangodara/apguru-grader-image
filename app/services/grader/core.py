@@ -24,7 +24,7 @@ import time
 from collections import defaultdict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Literal, TypedDict
@@ -297,6 +297,11 @@ def generate_with_retry(
             continue
         return response
 
+    # Unreachable: the final attempt always returns above or raises; making the
+    # non-return explicit satisfies RET503 and guards against a future edit
+    # silently falling through to an implicit ``return None``.
+    raise RuntimeError("generate_with_retry exhausted all attempts without returning")
+
 
 # ---------------------------------------------------------------------------
 # Question-ID normalization — canonical lowercase form everywhere
@@ -374,11 +379,11 @@ def ocr_submission(
         contents.append(f"[Answer PDF page {i}/{len(answer_images)}]")
         contents.append(img)
 
-    config_kwargs: dict = dict(
-        response_mime_type="application/json",
-        response_schema=ParsedSubmission,
-        temperature=0,
-    )
+    config_kwargs: dict = {
+        "response_mime_type": "application/json",
+        "response_schema": ParsedSubmission,
+        "temperature": 0,
+    }
     if thinking_level:
         config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_level=thinking_level)
 
@@ -1043,7 +1048,7 @@ def _synthesize_parent_answers_from_subparts(
     for parent, children in by_parent.items():
         children.sort()  # natural qid order: 3a-i, 3a-ii, 3a-iii
         contributors = (
-            [parent] + children if parent in answer_by_qid else list(children)
+            [parent, *children] if parent in answer_by_qid else list(children)
         )
         parts: list[str] = []
         for c in contributors:
@@ -1346,7 +1351,7 @@ def render_html_report(
             source_pages=list(p_ans.source_pages),
             low_confidence_snippets=list(p_ans.low_confidence_snippets),
         ))
-    for parent_qid, merged_ans in merged_map.items():
+    for _parent_qid, merged_ans in merged_map.items():
         augmented.append(merged_ans)
 
     # Map each page -> answers appearing on it (OCR order, recovered last).
@@ -1620,7 +1625,7 @@ def assemble_scorecard(
         percentage=percentage,
         questions=question_scorecards,
         review_flags=review_flags,
-        generated_at=datetime.now(timezone.utc).isoformat(),
+        generated_at=datetime.now(UTC).isoformat(),
         config_echo=config_echo or {},
     )
 
@@ -1656,10 +1661,7 @@ def grade_submission(
     rubric_by_qid = flatten_rubric_by_subpart(rubric)
     answer_by_qid = {a.question_id: a for a in submission.answers}
 
-    if questions == "all":
-        universe = set(rubric_by_qid)
-    else:
-        universe = set(questions) & set(rubric_by_qid)
+    universe = set(rubric_by_qid) if questions == "all" else set(questions) & set(rubric_by_qid)
     if not universe:
         raise RuntimeError(
             f"No questions to grade for {subject!r}. "
@@ -1674,7 +1676,7 @@ def grade_submission(
     # without labeling 4a/4b/4c/4d) by copying the parent transcript into each
     # missing sub-part. Sub-parts genuinely not addressed remain in
     # ``missing_qids`` and are scored 0/max as before.
-    answer_by_qid, still_missing, recovered_qids = (
+    answer_by_qid, _still_missing, recovered_qids = (
         _synthesize_subpart_answers_from_parents(answer_by_qid, initial_missing)
     )
     if recovered_qids:

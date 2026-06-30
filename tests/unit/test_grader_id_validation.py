@@ -93,7 +93,8 @@ async def test_create_job_accepts_when_rubric_present():
         patch.object(grader_job_service, "get_exam", new=AsyncMock(return_value=exam_row)),
     ):
         job_key = await grader_job_service.create_job(1, _typed_submission())
-    assert isinstance(job_key, str) and job_key
+    assert isinstance(job_key, str)
+    assert job_key
     db.write.assert_awaited_once()
 
 

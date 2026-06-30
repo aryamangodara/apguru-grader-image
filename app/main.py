@@ -1,19 +1,18 @@
 from contextlib import asynccontextmanager
 
 import structlog
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from dotenv import load_dotenv
-
 load_dotenv()
 
+from app.api.router import api_router
 from app.core.config import settings
 from app.core.database import Database
-from app.core.logging import setup_logging
 from app.core.errors import register_exception_handlers
+from app.core.logging import setup_logging
 from app.core.observability import configure_langfuse, shutdown_langfuse
-from app.api.router import api_router
 from app.middleware.request_logging import RequestLoggingMiddleware
 
 log = structlog.stdlib.get_logger()
