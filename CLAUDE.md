@@ -45,8 +45,11 @@ ruff check .
 ruff check . --fix
 
 # Database migrations are NOT in this repo — they live in the central repo
-# apguru-centralized-alembic (its CI/CD applies `alembic upgrade head` to prod on
-# merge to its main). The grader app does not migrate on boot.
+# apguru-centralized-alembic (https://github.com/ap-guru/apguru-centralized-alembic),
+# which you can clone alongside this repo at ./apguru-centralized-alembic/ for local
+# reference (git-excluded — not part of this repo). Its CI/CD applies
+# `alembic upgrade head` to prod on merge to its main; the grader app does not
+# migrate on boot.
 
 # Docker (single app container, bound to 127.0.0.1:8081 — front it with the host
 # reverse proxy). Always pass -p apguru-grader so redeploys reuse the same named
@@ -127,7 +130,7 @@ Both then run `grade_submission` (Gemini against the rubric, with the per-course
 - **Named SQL parameters only** (`:param`) — never f-strings or `%s`.
 - `settings.use_local_db` toggles all traffic between local MySQL and the configured cloud host.
 - **Grader tables:** `ap_exam` (registered exams + cached rubric JSON) and `grading_job` (per-submission job: status ∈ {queued, running, succeeded, failed}, plus the `scorecard_json`); per-course `grading_addendum` / `ocr_addendum` columns live in `course_configs`.
-- **Migrations are NOT in this repo.** The schema (the grader tables and the `course_configs` seeds) is owned by the central [`apguru-centralized-alembic`](https://github.com/aryamangodara/apguru-centralized-alembic) repo, whose CI/CD runs `alembic upgrade head` against the shared prod DB on merge to its `main`. The grader app does **not** migrate on boot. To add/alter a table or seed courses, open a migration PR there (e.g. the Cambridge IGCSE/A-Level courses are seeded by central migration `031`).
+- **Migrations are NOT in this repo.** The schema (the grader tables and the `course_configs` seeds) is owned by the central [`apguru-centralized-alembic`](https://github.com/ap-guru/apguru-centralized-alembic) repo — which you can clone alongside this repo at [`./apguru-centralized-alembic/`](apguru-centralized-alembic/) for local reference (git-excluded, not part of this repo) — whose CI/CD runs `alembic upgrade head` against the shared prod DB on merge to its `main`. The grader app does **not** migrate on boot. To add/alter a table or seed courses, open a migration PR there (e.g. the Cambridge IGCSE/A-Level courses are seeded by central migration `031`).
 
 ## Conventions
 
@@ -149,7 +152,7 @@ Both then run `grade_submission` (Gemini against the rubric, with the per-course
 | Domain error / new error code | `app/core/errors.py` — subclass `GraderError`, add an `ErrorCode` | handlers registered in `create_app` auto-render it |
 | Grader pipeline primitive | `app/services/grader/` (`core.py` / `schemas.py` / …) | re-exported via `app/services/grader/__init__.py` |
 | Grader prompt | `app/services/grader/prompts/*.txt` | loaded by the grader package |
-| DB migration / course seed | the central `apguru-centralized-alembic` repo (PR there) | applied by its CI/CD on merge |
+| DB migration / course seed | the central [`apguru-centralized-alembic`](https://github.com/ap-guru/apguru-centralized-alembic) repo — local clone at `./apguru-centralized-alembic/` (PR there) | applied by its CI/CD on merge |
 | Config setting | `app/core/config.py` | also add to `.env.example` |
 
 ## Testing
