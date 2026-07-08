@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@v5  # v5 (Node 24), matching deploy.yml
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6  # v6 (Node 24), clears the Node 20 deprecation warning
         with:
           python-version: "3.13"  # matches the Dockerfile prod base image
           cache: pip
