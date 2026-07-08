@@ -14,6 +14,16 @@ class Settings(BaseSettings):
     app_name: str = "APGuru Grader API"
     debug: bool = True
     api_prefix: str = "/api/v1"
+    # ASGI mount prefix when this service is served behind a PATH-based reverse
+    # proxy that strips the prefix (e.g. "/grader" when the host Apache proxies
+    # https://…/grader/ → this container). Sets FastAPI's root_path so Swagger UI
+    # (/docs) and the OpenAPI schema reference the spec under the prefix
+    # (…/grader/openapi.json) instead of an absolute /openapi.json that 404s
+    # through the proxy. Empty = served at the domain root (local/dev/direct).
+    root_path: str = Field(
+        default="",
+        description="ASGI mount prefix when behind a path-based reverse proxy (e.g. '/grader'); empty at root.",
+    )
     if debug:
         log_level: str = Field(default="DEBUG")
     else:
