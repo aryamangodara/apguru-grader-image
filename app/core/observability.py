@@ -5,7 +5,9 @@ LLM services and chat orchestrator can emit traces without each touching
 environment variables or SDK internals directly.
 
 Public surface:
-    - ``configure_langfuse()``      — called once at app startup
+    - ``configure_langfuse()``      — called once at app startup (fail-fast)
+    - ``require_langfuse_active()`` — raise unless tracing is active; called
+                                      before any grader LLM call
     - ``shutdown_langfuse()``       — called once at shutdown (flushes buffers)
     - ``langfuse_enabled()``        — True only when both keys are set
     - ``set_trace_attributes(...)`` — attach session / user / tags / metadata
@@ -18,10 +20,12 @@ Public surface:
                                       trace attribute and input propagation
                                       so new providers only need one line
 
-When credentials are missing the Langfuse SDK silently disables itself;
-``@observe`` decorators and every helper here become no-ops.  Core
-business logic therefore keeps running whether Langfuse is configured
-or not.
+Langfuse is MANDATORY for the grader: every LLM call must be traced, so
+``configure_langfuse()`` aborts startup if credentials are missing or don't
+authenticate, and ``require_langfuse_active()`` refuses to let a grade/rubric
+call proceed untraced.  The individual helpers below still guard on
+``langfuse_enabled()`` and no-op when disabled so they're safe to call from any
+context (tests, scripts) without a configured client.
 """
 
 import functools
@@ -57,29 +61,66 @@ def langfuse_enabled() -> bool:
 
 
 def configure_langfuse() -> None:
-    """Initialize the Langfuse SDK.  Safe and idempotent.
+    """Initialize the Langfuse SDK and verify it authenticates.  Fail-fast.
 
-    Instantiates the Langfuse singleton with credentials pulled directly
-    from ``settings``.  No environment variable propagation — the
-    pydantic ``Settings`` class in ``app.core.config`` is the single
-    source of truth for Langfuse configuration.  No-op when credentials
-    are missing.
+    Instantiates the Langfuse singleton with credentials pulled directly from
+    ``settings`` (the pydantic ``Settings`` class is the single source of truth —
+    no environment variable propagation), then runs an ``auth_check()`` to
+    confirm the credentials are valid.
+
+    Langfuse is MANDATORY: this **raises** — aborting app startup — if the SDK
+    can't initialize or the credentials don't authenticate, so the grader never
+    serves traffic it would have to grade untraced.  This is the startup half of
+    the "no Langfuse, no LLM call" guarantee; the per-request half is
+    :func:`require_langfuse_active`.
     """
-    if not langfuse_enabled():
-        log.info("langfuse_disabled", reason="missing_credentials")
-        return
-
     try:
         from langfuse import Langfuse
 
-        Langfuse(
+        client = Langfuse(
             public_key=settings.langfuse_public_key,
             secret_key=settings.langfuse_secret_key,
             host=settings.langfuse_host,
         )
-        log.info("langfuse_configured", host=settings.langfuse_host)
     except Exception as exc:
-        log.warning("langfuse_configure_failed", error=str(exc))
+        raise RuntimeError(
+            f"Langfuse failed to initialize ({exc}). Langfuse is required — the "
+            "grader refuses to start without LLM tracing. Check LANGFUSE_* config."
+        ) from exc
+
+    # Confirm the keys actually work (bad creds must abort boot, not silently
+    # drop every trace). Guarded getattr so an SDK without auth_check still boots
+    # on a successful client construction.
+    auth_check = getattr(client, "auth_check", None)
+    if callable(auth_check):
+        try:
+            authed = auth_check()
+        except Exception as exc:
+            raise RuntimeError(
+                f"Langfuse auth check errored ({exc}). Langfuse is required — "
+                "verify LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_HOST."
+            ) from exc
+        if not authed:
+            raise RuntimeError(
+                "Langfuse auth check failed — credentials are set but invalid. "
+                "The grader refuses to start without working LLM tracing."
+            )
+    log.info("langfuse_configured", host=settings.langfuse_host)
+
+
+def require_langfuse_active() -> None:
+    """Raise unless Langfuse tracing is active — the per-request tracing gate.
+
+    Called at the entry to every grader code path that makes an LLM call (grade
+    a submission, parse a rubric) so a Gemini call is never issued untraced.
+    Enforces the "no Langfuse, no LLM call" product decision at runtime, backing
+    up the fail-fast startup check in :func:`configure_langfuse`.
+    """
+    if not langfuse_enabled():
+        raise RuntimeError(
+            "Langfuse is not configured — refusing to make any LLM call. Set "
+            "LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY (Langfuse is mandatory)."
+        )
 
 
 async def shutdown_langfuse() -> None:

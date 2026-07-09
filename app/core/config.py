@@ -52,11 +52,13 @@ class Settings(BaseSettings):
     google_cloud_project: str = Field(default="")
     google_cloud_location: str = Field(default="")
 
-    # Langfuse Observability
-    # Both keys must be set for tracing to activate. Missing keys = Langfuse SDK
-    # silently disables itself (app keeps working, no traces).
-    langfuse_public_key: str | None = Field(default=None)
-    langfuse_secret_key: str | None = Field(default=None)
+    # Langfuse Observability — MANDATORY.
+    # Every grader LLM call must be traced (product decision: no Langfuse, no LLM
+    # call). Both keys are required so the app fails fast at startup if tracing
+    # isn't configured, rather than silently grading untraced. Startup also
+    # verifies the credentials authenticate — see observability.configure_langfuse.
+    langfuse_public_key: str = Field(...)
+    langfuse_secret_key: str = Field(...)
     langfuse_host: str = Field(default="https://cloud.langfuse.com")
 
     # AP FRQ Auto-Grader (grader feature)

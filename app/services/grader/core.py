@@ -33,6 +33,14 @@ from google import genai
 from google.genai import types
 from PIL import Image
 
+# OpenTelemetry context — used to carry the active trace (e.g. Langfuse's
+# ``grader.job`` span) into the grading thread pool in ``grade_questions_parallel``.
+# Optional for this vendored package: degrade to a no-op if it isn't installed.
+try:
+    from opentelemetry import context as _otel_context
+except Exception:  # pragma: no cover - otel ships alongside langfuse in the app
+    _otel_context = None
+
 from .schemas import (
     ParsedRubric,
     ParsedSubmission,
@@ -752,28 +760,41 @@ def grade_questions_parallel(
     t0 = time.perf_counter()
     timings: dict[str, tuple[float, float]] = {}  # qid -> (start, end) relative to t0
 
+    # Snapshot the active OTel trace context (e.g. the Langfuse ``grader.job``
+    # span) so each worker thread can re-attach it. A bare ThreadPoolExecutor
+    # does NOT propagate contextvars the way ``asyncio.to_thread`` does, so
+    # without this every ``grade_question`` generation span would orphan onto
+    # its own trace instead of nesting under the job — which is why per-question
+    # grade cost was invisible on the job trace in Langfuse. No-op without otel.
+    parent_ctx = _otel_context.get_current() if _otel_context is not None else None
+
     def _grade(item: tuple[str, QuestionRubric, TranscribedAnswer]):
-        qid, qr, ans = item
-        start = time.perf_counter() - t0
-        qs = grade_question(
-            client=client,
-            question_rubric=qr,
-            answer=ans,
-            subject=subject,
-            prompt_path=prompt_path,
-            subject_addendum=subject_addendum,
-            model=model,
-            review_recommended=(
-                qid in force_review or ans.confidence < low_confidence_threshold
-            ),
-            on_response=on_response,
-        )
-        end = time.perf_counter() - t0
-        timings[qid] = (start, end)
-        if verbose:
-            print(f"  [{threading.current_thread().name}] Q{qid}: "
-                  f"start={start:5.1f}s end={end:5.1f}s ({end - start:4.1f}s)")
-        return qid, qs
+        token = _otel_context.attach(parent_ctx) if parent_ctx is not None else None
+        try:
+            qid, qr, ans = item
+            start = time.perf_counter() - t0
+            qs = grade_question(
+                client=client,
+                question_rubric=qr,
+                answer=ans,
+                subject=subject,
+                prompt_path=prompt_path,
+                subject_addendum=subject_addendum,
+                model=model,
+                review_recommended=(
+                    qid in force_review or ans.confidence < low_confidence_threshold
+                ),
+                on_response=on_response,
+            )
+            end = time.perf_counter() - t0
+            timings[qid] = (start, end)
+            if verbose:
+                print(f"  [{threading.current_thread().name}] Q{qid}: "
+                      f"start={start:5.1f}s end={end:5.1f}s ({end - start:4.1f}s)")
+            return qid, qs
+        finally:
+            if token is not None:
+                _otel_context.detach(token)
 
     results: dict[str, QuestionScorecard] = {}
     workers = max(1, min(max_workers, len(work)))

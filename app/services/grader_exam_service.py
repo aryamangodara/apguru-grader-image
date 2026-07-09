@@ -19,7 +19,11 @@ from app.core.config import settings
 from app.core.course_config import get_course_config
 from app.core.database import Database
 from app.core.errors import InvalidPdfUrlError, InvalidTestError, UnknownCourseError
-from app.core.observability import set_observation_input, set_trace_attributes
+from app.core.observability import (
+    require_langfuse_active,
+    set_observation_input,
+    set_trace_attributes,
+)
 from app.schemas.grader_schema import ExamSummary, RegisterExamRequest, RegisterExamResponse
 from app.services.grader import (
     ParsedRubric,
@@ -172,6 +176,10 @@ async def register_exam(req: RegisterExamRequest) -> RegisterExamResponse:
 
     course = await get_course_config(req.course_id)
     subject = course.get("course_name") or req.course_id
+
+    # Langfuse is mandatory — never parse a rubric (an LLM call) untraced. Guard
+    # here, after the cache-hit early return above (a cache hit makes no LLM call).
+    require_langfuse_active()
 
     # Parse the marking scheme once (offload the blocking Gemini call to a thread).
     # The vendored parse_rubric_pdf still takes year/set_label as LLM context: year

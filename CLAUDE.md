@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 APGuru Grader — an async **FastAPI** backend that auto-grades **AP® Free-Response Questions (FRQ)**. It registers an exam (parsing the marking-scheme PDF into a structured rubric once, then caching it), accepts a student's answers (as a PDF for handwritten exams, or inline JSON for typed exams), grades them against the rubric, and returns a UI-complete scorecard.
 
-**Google Gemini** is the LLM, called either through **Vertex AI** (default) or the AI Studio API key. **MySQL** is the datastore. **Langfuse** is optional LLM tracing.
+**Google Gemini** is the LLM, called either through **Vertex AI** (default) or the AI Studio API key. **MySQL** is the datastore. **Langfuse** is **mandatory** LLM tracing — every Gemini call must be traced, so the app fails fast at startup without valid `LANGFUSE_*` credentials and refuses to make an LLM call when tracing isn't active (**no Langfuse, no LLM call**; see `app/core/observability.py::configure_langfuse` / `require_langfuse_active`).
 
 > This repo was reduced from a larger analytics dashboard to **only** the grader feature. If you find a reference to chat/quiz/weekly-plan/error-analysis/etc., it is stale — remove it.
 
@@ -121,7 +121,7 @@ Both then run `grade_submission` (Gemini against the rubric, with the per-course
 
 **LLM cost — reduce it where possible, track it in Langfuse.** One graded submission fans out into several Gemini calls (handwritten OCR, rubric parse [once per exam, then cached], per-question grading, typed-answer labelling, and the post-grade audience summaries), so spend adds up fast. Treat lowering LLM cost as an ongoing goal whenever you touch the pipeline: prefer the cheapest model that holds quality (the `grader_*_model` settings), avoid redundant calls (the rubric is cached per exam; summaries are gated by `grader_enable_summaries`), keep prompts and per-call inputs compact, and don't add an LLM call where already-computed data suffices. Every call emits a `grader.*` Langfuse generation span (via `gemini_generation_reporter`) carrying model + token usage + cost — **use Langfuse to find the expensive calls and to confirm a change actually lowers spend**, not just to debug.
 
-**Cross-cutting (`app/core/`).** `config.py` (pydantic-settings; required fields use `Field(...)` to fail fast), `database.py` (the `Database` singleton), `course_config.py` (per-course config incl. `get_grading_addendum` / `get_ocr_addendum`), `errors.py` (the typed `GraderError` hierarchy + the `{error_code, detail}` exception handlers), `observability.py` + `logging.py` (structlog + optional Langfuse). `app/middleware/request_logging.py` stamps every log line with a `request_id`. Startup/shutdown (Langfuse init, DB connect, reaper) run in the `lifespan` block in `app/main.py`.
+**Cross-cutting (`app/core/`).** `config.py` (pydantic-settings; required fields use `Field(...)` to fail fast), `database.py` (the `Database` singleton), `course_config.py` (per-course config incl. `get_grading_addendum` / `get_ocr_addendum`), `errors.py` (the typed `GraderError` hierarchy + the `{error_code, detail}` exception handlers), `observability.py` + `logging.py` (structlog + **mandatory** Langfuse — `configure_langfuse` aborts startup on missing/invalid keys; `require_langfuse_active` gates every LLM entry point). `app/middleware/request_logging.py` stamps every log line with a `request_id`. Startup/shutdown (Langfuse init, DB connect, reaper) run in the `lifespan` block in `app/main.py`.
 
 ## Database
 
