@@ -32,7 +32,11 @@ from app.core.errors import (
     RubricNotGeneratedError,
     TestNotRegisteredError,
 )
-from app.core.observability import record_trace_output, set_trace_attributes
+from app.core.observability import (
+    record_trace_output,
+    require_langfuse_active,
+    set_trace_attributes,
+)
 from app.schemas.grader_schema import (
     CreateSubmissionRequest,
     GradedScorecardResponse,
@@ -260,6 +264,9 @@ async def _attach_summaries(
 
 
 async def _do_grade(job_key: str) -> None:
+    # Langfuse is mandatory — never run a grade (OCR + per-question grading +
+    # summaries, all LLM calls) untraced. Fails the job with a clear message.
+    require_langfuse_active()
     db = Database.get_instance()
     job = await db.query_one("SELECT * FROM grading_job WHERE job_key=:k", {"k": job_key})
     exam = await db.query_one("SELECT * FROM ap_exam WHERE id=:id", {"id": job["exam_id"]})

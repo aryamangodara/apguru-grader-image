@@ -5,11 +5,19 @@ from __future__ import annotations
 import os
 
 # The Settings singleton fires on first import of any app module — provide dummy
-# DB credentials so the import doesn't fail when no .env is present.
+# credentials so the import doesn't fail when no .env is present. Langfuse keys
+# are required now (Langfuse is mandatory); the lifespan never runs under
+# ASGITransport so no real Langfuse client is initialized from these dummies.
 os.environ.setdefault("DB_HOST", "localhost")
 os.environ.setdefault("DB_USER", "test")
 os.environ.setdefault("DB_PASSWORD", "test")
 os.environ.setdefault("DB_NAME", "test_db")
+os.environ.setdefault("LANGFUSE_PUBLIC_KEY", "pk-lf-test")
+os.environ.setdefault("LANGFUSE_SECRET_KEY", "sk-lf-test")
+# Keep the SDK from shipping spans to Langfuse Cloud with the dummy keys above
+# (would 401 in a background flush). Our app's langfuse_enabled() still reads the
+# keys as present, so the mandatory-Langfuse enforcement is exercised unchanged.
+os.environ.setdefault("LANGFUSE_TRACING_ENABLED", "false")
 
 from unittest.mock import AsyncMock, patch
 
