@@ -61,18 +61,24 @@ def langfuse_enabled() -> bool:
 
 
 def configure_langfuse() -> None:
-    """Initialize the Langfuse SDK and verify it authenticates.  Fail-fast.
+    """Initialize the Langfuse SDK; verify credentials best-effort.
 
     Instantiates the Langfuse singleton with credentials pulled directly from
     ``settings`` (the pydantic ``Settings`` class is the single source of truth —
-    no environment variable propagation), then runs an ``auth_check()`` to
-    confirm the credentials are valid.
+    no environment variable propagation), then runs a best-effort ``auth_check()``.
 
-    Langfuse is MANDATORY: this **raises** — aborting app startup — if the SDK
-    can't initialize or the credentials don't authenticate, so the grader never
-    serves traffic it would have to grade untraced.  This is the startup half of
-    the "no Langfuse, no LLM call" guarantee; the per-request half is
-    :func:`require_langfuse_active`.
+    Langfuse is MANDATORY, enforced in layers:
+
+    * Missing keys are a hard startup failure — the required settings in
+      ``app.core.config`` won't even construct without them.
+    * This function **raises** (aborting startup) if the SDK can't initialize at
+      all — tracing plumbing that can't be set up is a genuine misconfiguration.
+    * A failed / errored ``auth_check()`` is logged as a **warning** but does NOT
+      abort startup: a Langfuse outage (or transient blip) must not block the
+      grader from booting. Traces buffer and flush when Langfuse recovers.
+
+    Runtime coverage is guaranteed regardless by :func:`require_langfuse_active`,
+    which refuses any LLM call when Langfuse isn't configured.
     """
     try:
         from langfuse import Langfuse
@@ -88,23 +94,20 @@ def configure_langfuse() -> None:
             "grader refuses to start without LLM tracing. Check LANGFUSE_* config."
         ) from exc
 
-    # Confirm the keys actually work (bad creds must abort boot, not silently
-    # drop every trace). Guarded getattr so an SDK without auth_check still boots
-    # on a successful client construction.
+    # Best-effort credential check: a failed / errored auth_check is a WARNING,
+    # not a boot abort — Langfuse being unreachable (or a transient blip) must not
+    # block the grader from starting. Traces buffer and flush when it recovers;
+    # require_langfuse_active() still guarantees no LLM call runs without Langfuse
+    # configured. Guarded getattr so an SDK without auth_check still boots.
     auth_check = getattr(client, "auth_check", None)
     if callable(auth_check):
         try:
             authed = auth_check()
         except Exception as exc:
-            raise RuntimeError(
-                f"Langfuse auth check errored ({exc}). Langfuse is required — "
-                "verify LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY / LANGFUSE_HOST."
-            ) from exc
-        if not authed:
-            raise RuntimeError(
-                "Langfuse auth check failed — credentials are set but invalid. "
-                "The grader refuses to start without working LLM tracing."
-            )
+            log.warning("langfuse_auth_check_errored", host=settings.langfuse_host, error=str(exc))
+        else:
+            if not authed:
+                log.warning("langfuse_auth_check_failed", host=settings.langfuse_host)
     log.info("langfuse_configured", host=settings.langfuse_host)
 
 

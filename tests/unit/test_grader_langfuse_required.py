@@ -47,12 +47,27 @@ def test_configure_langfuse_raises_on_init_failure(monkeypatch):
         observability.configure_langfuse()
 
 
-def test_configure_langfuse_raises_on_auth_failure(monkeypatch):
+def test_configure_langfuse_warns_not_raises_on_auth_failure(monkeypatch):
+    # A failed auth check must NOT abort startup — a Langfuse outage shouldn't
+    # block boot. It logs a warning and continues (traces buffer for later).
     client = MagicMock()
     client.auth_check.return_value = False
     monkeypatch.setattr("langfuse.Langfuse", MagicMock(return_value=client))
-    with pytest.raises(RuntimeError, match="auth check failed"):
-        observability.configure_langfuse()
+    fake_log = MagicMock()
+    monkeypatch.setattr(observability, "log", fake_log)
+    observability.configure_langfuse()  # must not raise
+    assert fake_log.warning.called
+
+
+def test_configure_langfuse_warns_not_raises_when_auth_check_errors(monkeypatch):
+    # An auth_check that raises (e.g. network error) is likewise non-fatal.
+    client = MagicMock()
+    client.auth_check.side_effect = Exception("network down")
+    monkeypatch.setattr("langfuse.Langfuse", MagicMock(return_value=client))
+    fake_log = MagicMock()
+    monkeypatch.setattr(observability, "log", fake_log)
+    observability.configure_langfuse()  # must not raise
+    assert fake_log.warning.called
 
 
 def test_configure_langfuse_ok_when_auth_passes(monkeypatch):

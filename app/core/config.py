@@ -55,8 +55,8 @@ class Settings(BaseSettings):
     # Langfuse Observability — MANDATORY.
     # Every grader LLM call must be traced (product decision: no Langfuse, no LLM
     # call). Both keys are required so the app fails fast at startup if tracing
-    # isn't configured, rather than silently grading untraced. Startup also
-    # verifies the credentials authenticate — see observability.configure_langfuse.
+    # isn't configured, rather than silently grading untraced. A failed auth check
+    # at startup only warns (won't block boot) — see observability.configure_langfuse.
     langfuse_public_key: str = Field(...)
     langfuse_secret_key: str = Field(...)
     langfuse_host: str = Field(default="https://cloud.langfuse.com")
