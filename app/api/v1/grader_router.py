@@ -18,7 +18,7 @@ group). The caller-supplied PDF URLs are SSRF-guarded in the fetch layer
 """
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Path, Query
+from fastapi import APIRouter, BackgroundTasks, Body, Path, Query
 
 from app.controllers import grader_controller
 from app.core.errors import ErrorCode, ErrorResponse
@@ -39,10 +39,24 @@ def _error_example(error_code: ErrorCode, detail: str, *, summary: str) -> dict:
 
 
 # Documents the {error_code, detail} error envelope on every grader route (see /docs).
+# 405/422 are framework-raised (wrong HTTP method / request validation). 405 carries a
+# concrete example so Swagger doesn't auto-fill a misleading placeholder — without it,
+# the UI shows the first enum value (TEST_NOT_REGISTERED) + "string" for a plain
+# Method-Not-Allowed. Applied router-wide so every grader route renders it correctly.
 _ERROR_RESPONSES = {
     400: {"model": ErrorResponse},
     404: {"model": ErrorResponse},
-    405: {"model": ErrorResponse},
+    405: {
+        "model": ErrorResponse,
+        "content": {
+            "application/json": {
+                "example": {
+                    "error_code": ErrorCode.METHOD_NOT_ALLOWED.value,
+                    "detail": "Method Not Allowed",
+                }
+            }
+        },
+    },
     409: {"model": ErrorResponse},
     422: {"model": ErrorResponse},
 }
@@ -50,7 +64,7 @@ _ERROR_RESPONSES = {
 # Concrete per-failure examples for the submit endpoint, so Swagger shows WHICH
 # error_code it emits and when — not just a generic ErrorResponse $ref. The detail
 # strings mirror the exact messages raised by grader_job_service.create_job so the
-# docs stay truthful to the behaviour. (405/422 keep the router-wide generic entry.)
+# docs stay truthful to the behaviour. (405/422 come from the router-wide _ERROR_RESPONSES.)
 _SUBMISSION_ERROR_RESPONSES = {
     400: {
         "model": ErrorResponse,
@@ -103,6 +117,26 @@ _SUBMISSION_ERROR_RESPONSES = {
         },
     },
 }
+
+# Named request-body examples so /docs shows BOTH submission shapes with a
+# Handwritten/Typed switcher. A schema-level `examples` array only renders its first
+# item, so the typed inline-`answers` shape would otherwise be invisible in the UI.
+_SUBMISSION_REQUEST_EXAMPLES = {
+    "handwritten": {
+        "summary": "Handwritten submission (answers PDF, OCR'd)",
+        "value": {
+            "student_id": 1001,
+            "answers_pdf_url": "https://files.example.com/answers/1001.pdf",
+        },
+    },
+    "typed": {
+        "summary": "Typed submission (inline answers, no OCR)",
+        "value": {
+            "student_id": 1001,
+            "answers": {"1": "Mitochondria are the...", "2": "The independent variable is..."},
+        },
+    },
+}
 router = APIRouter(prefix="/grader", tags=["Grader"], responses=_ERROR_RESPONSES)
 
 
@@ -136,16 +170,18 @@ async def list_exams(
 )
 async def create_submission(
     test_id: Annotated[int, Path(description="tests.id of the registered exam to grade against.")],
-    body: CreateSubmissionRequest,
+    body: Annotated[
+        CreateSubmissionRequest, Body(openapi_examples=_SUBMISSION_REQUEST_EXAMPLES)
+    ],
     background_tasks: BackgroundTasks,
 ) -> CreateSubmissionResponse:
     """Enqueue grading for one student submission; returns a job_id to poll.
 
     The exam's mode is fixed at registration: a **handwritten** exam requires
-    ``answers_pdf_url``; a **typed** exam requires inline ``answers``. Sending the
-    field for the wrong mode is the usual cause of ``INVALID_SUBMISSION`` — the
-    endpoint validates the body against the stored mode, it does not infer the mode
-    from which field you send.
+    ``answers_pdf_url``; a **typed** exam requires inline ``answers`` (see the
+    Handwritten/Typed request examples). Sending the field for the wrong mode is the
+    usual cause of ``INVALID_SUBMISSION`` — the endpoint validates the body against the
+    stored mode, it does not infer the mode from which field you send.
 
     Errors (all rendered as the ``{error_code, detail}`` envelope; see the example
     responses below):
