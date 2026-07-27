@@ -140,7 +140,7 @@ async def get_job(job_id: str) -> GradingJobResponse | None:
     """Load a job by its public job_key, hydrating the scorecard when ready."""
     db = Database.get_instance()
     row = await db.query_one(
-        "SELECT j.*, e.test_id FROM grading_job j JOIN ap_exam e ON e.id = j.exam_id "
+        "SELECT j.*, e.test_id FROM grading_job j JOIN assessment_registry e ON e.id = j.exam_id "
         "WHERE j.job_key = :k",
         {"k": job_id},
     )
@@ -182,7 +182,7 @@ async def list_jobs(
         "j.created_at, j.started_at, j.finished_at, j.error_message, "
         "e.test_id, e.test_name, "
         "CAST(JSON_EXTRACT(j.scorecard_json, '$.percentage') AS DECIMAL(5,2)) AS percentage "
-        "FROM grading_job j JOIN ap_exam e ON e.id = j.exam_id "
+        "FROM grading_job j JOIN assessment_registry e ON e.id = j.exam_id "
         "WHERE e.assessment_type = :atype"
     )
     params: dict[str, Any] = {"atype": assessment_type}
@@ -231,7 +231,7 @@ async def get_assessment_job(job_id: str) -> AssessmentJobResponse | None:
     db = Database.get_instance()
     row = await db.query_one(
         "SELECT j.*, e.test_id, e.assessment_type FROM grading_job j "
-        "JOIN ap_exam e ON e.id = j.exam_id "
+        "JOIN assessment_registry e ON e.id = j.exam_id "
         "WHERE j.job_key = :k AND e.assessment_type IN ('homework', 'quiz')",
         {"k": job_id},
     )
@@ -273,7 +273,7 @@ async def list_assessment_jobs(
         "j.created_at, j.started_at, j.finished_at, j.error_message, "
         "e.test_id, e.test_name, e.assessment_type, "
         "CAST(JSON_EXTRACT(j.scorecard_json, '$.percentage') AS DECIMAL(5,2)) AS percentage "
-        "FROM grading_job j JOIN ap_exam e ON e.id = j.exam_id "
+        "FROM grading_job j JOIN assessment_registry e ON e.id = j.exam_id "
         "WHERE e.assessment_type = :atype"
     )
     params: dict[str, Any] = {"atype": assessment_type}
@@ -377,7 +377,7 @@ async def _do_grade(job_key: str) -> None:
     require_langfuse_active()
     db = Database.get_instance()
     job = await db.query_one("SELECT * FROM grading_job WHERE job_key=:k", {"k": job_key})
-    exam = await db.query_one("SELECT * FROM ap_exam WHERE id=:id", {"id": job["exam_id"]})
+    exam = await db.query_one("SELECT * FROM assessment_registry WHERE id=:id", {"id": job["exam_id"]})
 
     rubric = get_cached_rubric(exam)
     course_id = exam["course_id"]
