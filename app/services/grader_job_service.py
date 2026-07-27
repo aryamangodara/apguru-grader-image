@@ -220,11 +220,19 @@ async def list_jobs(
 # behaviour are untouched.
 
 async def get_assessment_job(job_id: str) -> AssessmentJobResponse | None:
-    """Load a homework/quiz job by its public job_key, hydrating the scorecard when ready."""
+    """Load a homework/quiz job by its public job_key, hydrating the scorecard when ready.
+
+    Scoped to assessment rows (``assessment_type IN ('homework','quiz')``): an *exam*
+    job_key resolves to ``None`` here so the controller returns the documented 404
+    ``JOB_NOT_FOUND`` instead of the surface leaking an exam job — and so an
+    ``assessment_type='exam'`` row is never coerced into the ``homework|quiz``-only
+    ``AssessmentJobResponse`` model (which would raise a response-validation error).
+    """
     db = Database.get_instance()
     row = await db.query_one(
         "SELECT j.*, e.test_id, e.assessment_type FROM grading_job j "
-        "JOIN ap_exam e ON e.id = j.exam_id WHERE j.job_key = :k",
+        "JOIN ap_exam e ON e.id = j.exam_id "
+        "WHERE j.job_key = :k AND e.assessment_type IN ('homework', 'quiz')",
         {"k": job_id},
     )
     if row is None:

@@ -169,3 +169,17 @@ async def test_list_assessment_jobs_filters_by_type_and_source():
     assert "e.assessment_type = :atype" in sql
     assert params["atype"] == "homework"
     assert params["source_id"] == 211
+
+
+async def test_get_assessment_job_excludes_exam_jobs():
+    # An exam job_key must not resolve on the assessment surface: the lookup scopes to
+    # homework/quiz, so an exam row is filtered out (-> None -> 404 JOB_NOT_FOUND) and
+    # assessment_type='exam' is never coerced into the homework|quiz response model.
+    db = MagicMock()
+    db.query_one = AsyncMock(return_value=None)
+    with patch.object(grader_job_service.Database, "get_instance", return_value=db):
+        result = await grader_job_service.get_assessment_job("some-job-key")
+    assert result is None
+    sql, params = db.query_one.call_args.args
+    assert "e.assessment_type IN ('homework', 'quiz')" in sql
+    assert params == {"k": "some-job-key"}
