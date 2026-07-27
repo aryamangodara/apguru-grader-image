@@ -199,7 +199,7 @@ pytest tests/                                   # full suite (unit + integration
 pytest tests/integration/test_grader_api.py     # grader HTTP contract
 ```
 
-`tests/` is the automated pytest suite (`asyncio_mode=auto`; the DB is mocked). `scripts/smoke_test_api.py` hits **every** endpoint against a running server (read-only, no LLM, no seeded data) — it's the gate the deploy runs on the freshly-built container and the release runbook runs before publishing; run it locally with `python scripts/smoke_test_api.py` (add `--deep` for one real graded run). `scripts/tests/grader/test_grader_handwritten_e2e.py` is a **manual** end-to-end test that drives a running server through register → submit → poll with a live LLM — run it directly with `python`, not pytest.
+`tests/` is the automated pytest suite (`asyncio_mode=auto`; the DB is mocked). `scripts/smoke_test_api.py` hits **every** endpoint against a running server (read-only, no LLM, no seeded data) — it's the gate the deploy runs on the freshly-built container and the release runbook runs before publishing; run it locally with `python scripts/smoke_test_api.py` (add `--deep` for one real graded run). `scripts/tests/grader/test_grader_handwritten_e2e.py` is a **manual** end-to-end test that drives a running server through register → submit → poll with a live LLM — run it directly with `python`, not pytest. `test_grader_assessments_e2e.py` does the same for the **homework + quiz** surface (`/grader/assessments`) plus an exam-surface regression pass; `setup_grader_e2e_db.py` provisions an isolated throwaway `grader_e2e` database to run it against without touching real rows.
 
 ## Architecture
 

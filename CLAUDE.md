@@ -63,8 +63,14 @@ docker compose -p apguru-grader down
 The Docker image entrypoint runs `gunicorn app.main:app -c gunicorn.conf.py` — it does **not** run migrations (schema is owned by the central `apguru-centralized-alembic` pipeline). Manual end-to-end smoke test (hits a **running** server + a live LLM, not collected by pytest):
 
 ```bash
-python scripts/tests/grader/test_grader_handwritten_e2e.py            # AP Biology
+python scripts/tests/grader/test_grader_handwritten_e2e.py            # AP Biology (exam surface)
 python scripts/tests/grader/test_grader_handwritten_e2e.py psychology # any seeded slug
+
+# Homework + quiz surface (/grader/assessments): register/list/submit/poll/list-jobs for a
+# real homework + quiz, plus an exam-surface regression pass. Point it anywhere with GRADER_BASE_URL.
+python scripts/tests/grader/test_grader_assessments_e2e.py
+# To run that against an ISOLATED throwaway DB (no real rows touched), provision one first:
+python scripts/tests/grader/setup_grader_e2e_db.py   # creates `grader_e2e`; then boot the app with DB_NAME=grader_e2e
 ```
 
 **Grader tuning lives in code/config, not feature env.** Operational knobs (models, DPI, concurrency, reaper window, confidence threshold) are `grader_*` settings in `app/core/config.py`. Per-subject grading/OCR guidance lives in the `course_configs` DB table (`grading_addendum` / `ocr_addendum`), resolved at grade time — not in env.
@@ -161,7 +167,7 @@ Both then run `grade_submission` (Gemini against the rubric, with the per-course
 
 - `tests/unit/` — pure logic (grader URL-guard, typed-answer labelling, lazy `fitz` import). `tests/integration/` — HTTP endpoints with the DB mocked via the `client` fixture in `tests/conftest.py`.
 - pytest with `asyncio_mode = "auto"` — do not add `@pytest.mark.asyncio`.
-- `scripts/tests/grader/test_grader_handwritten_e2e.py` is a **manual** smoke test against real infra — not collected by pytest.
+- `scripts/tests/grader/` holds **manual** e2e smoke tests against real infra (not collected by pytest): `test_grader_handwritten_e2e.py` (exam surface) and `test_grader_assessments_e2e.py` (homework + quiz via `/grader/assessments`, plus an exam-surface regression pass). `setup_grader_e2e_db.py` provisions an isolated throwaway `grader_e2e` DB (grader schema + real `course_configs` copied; shared tables untouched) so the assessments e2e can run without touching real rows.
 
 ## Production notes
 
