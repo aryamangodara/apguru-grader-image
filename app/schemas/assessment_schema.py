@@ -107,7 +107,7 @@ class AssessmentSubmissionRequest(BaseModel):
                     "answers_pdf_url": "https://files.example.com/answers/1001.pdf",
                 },
                 {
-                    "assessment_type": "quiz",
+                    "assessment_type": "homework",
                     "student_id": 1001,
                     "answers": {"1": "Mitochondria are the...", "2": "The independent variable is..."},
                 },
