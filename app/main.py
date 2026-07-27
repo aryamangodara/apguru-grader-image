@@ -56,8 +56,11 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title=settings.app_name,
-        version="1.5.3",
-        description="Auto-grades AP® Free-Response Questions (FRQ) from handwritten or typed student submissions.",
+        version="1.6.0",
+        description=(
+            "Auto-grades free-response work from handwritten or typed student submissions — "
+            "AP® exams/tests plus homework & quizzes (the /grader/assessments surface)."
+        ),
         debug=settings.debug,
         # "/grader" in prod (behind the host's path-based reverse proxy); "" locally.
         root_path=settings.root_path,

@@ -72,7 +72,7 @@ def _cases() -> list[Case]:
         ),
         (
             # issue #11: a valid (typed) body with a non-existent test_id reaches
-            # assert_test_is_valid -> `tests` table lookup (DB) -> 400, before any
+            # assert_source_is_valid -> `tests` table lookup (DB) -> 400, before any
             # write or Gemini call. Verifies that validation path on every deploy.
             "register invalid test_id -> 400 [DB]",
             "POST",

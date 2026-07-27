@@ -8,7 +8,7 @@ in app/services/grader/url_guard.py as the in-app backstop.
 """
 from fastapi import APIRouter
 
-from app.api.v1 import grader_router, health_router
+from app.api.v1 import assessment_router, grader_router, health_router
 
 # Central API Router
 api_router = APIRouter()
@@ -17,4 +17,5 @@ api_router = APIRouter()
 api_router.include_router(health_router.router)
 
 # ── Grader (intentionally public — restricted at the edge) ──────────
-api_router.include_router(grader_router.router)
+api_router.include_router(grader_router.router)  # exams/tests
+api_router.include_router(assessment_router.router)  # homework & quiz

@@ -73,7 +73,7 @@ gunicorn app.main:app -c gunicorn.conf.py
 
 ## API
 
-All routes are under `/api/v1`. Identifiers are keyed on `test_id` everywhere.
+All routes are under `/api/v1`. The exam/test surface below is keyed on `test_id`; a separate **homework & quiz** surface (below) reuses the same engine, jobs, and error envelope but is keyed on `(assessment_type, source_id)`.
 
 | Method | Path | Purpose | Success |
 |---|---|---|---|
@@ -114,6 +114,44 @@ curl -X POST localhost:8080/api/v1/grader/exams/555/submissions -H 'Content-Type
 curl localhost:8080/api/v1/grader/jobs/<job_id>
 # → 200 {"job_id": "…", "test_id": 555, "student_id": 7, "status": "succeeded", "scorecard": { … }}
 ```
+
+### Homework & quiz
+
+The same engine grades **homework** and **quizzes** through a separate surface under
+`/api/v1/grader/assessments`, keyed on `(assessment_type, source_id)`. **`assessment_type`
+(`homework` | `quiz`) is a field in the request body (register/submit) or a query param (listings) —
+not in the URL path**; `source_id` is the main-app row id (`docs_homework_test.id` / `quiz.id`). The
+exam endpoints above are unchanged.
+
+| Method | Path | Purpose | Success |
+|---|---|---|---|
+| `POST` | `/grader/assessments/register` | Register a homework/quiz (`assessment_type` + `source_id` in body); parse + cache its rubric. | `201` |
+| `GET`  | `/grader/assessments?assessment_type=` | List registered homework/quiz; optional `&course_id=`. | `200` |
+| `POST` | `/grader/assessments/{source_id}/submissions` | Enqueue grading (`assessment_type` in body); returns a `job_id`. | `202` |
+| `GET`  | `/grader/assessments/jobs?assessment_type=` | List jobs by `&student_id=` and/or `&source_id=` (≥1 required). | `200` |
+| `GET`  | `/grader/assessments/jobs/{job_id}` | Poll job status; scorecard present once `succeeded`. | `200` |
+
+```bash
+# register a homework, then submit a student's answer PDF
+curl -X POST localhost:8080/api/v1/grader/assessments/register -H 'Content-Type: application/json' -d '{
+  "assessment_type": "homework",
+  "source_id": 211,
+  "course_id": "16",
+  "title": "Chapter 5 Homework",
+  "is_handwritten": true,
+  "marking_scheme_pdf_url": "https://example.com/marking-scheme.pdf",
+  "questions_pdf_url": "https://example.com/questions.pdf"
+}'
+
+curl -X POST localhost:8080/api/v1/grader/assessments/211/submissions -H 'Content-Type: application/json' -d '{
+  "assessment_type": "homework",
+  "student_id": 1001,
+  "answers_pdf_url": "https://example.com/student-answers.pdf"
+}'
+# → 202 {"job_id": "…", "status": "queued"}   — poll GET /grader/assessments/jobs/<job_id>
+```
+
+`assessment_type` tells the grader **what kind**; `source_id` tells it **which one** (a homework and a quiz can share a number, so the type travels in the body on submit too). Failures use the same `{error_code, detail}` envelope as the exam surface.
 
 ### Errors
 
