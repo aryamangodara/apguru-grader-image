@@ -37,30 +37,53 @@ from app.services.grader_prompts import rubric_prompt_for
 log = structlog.get_logger(__name__)
 
 
-async def get_exam(test_id: int) -> dict | None:
-    """Load an ap_exam row by the test_id it grades."""
-    db = Database.get_instance()
-    return await db.query_one(
-        "SELECT * FROM ap_exam WHERE test_id = :tid AND deleted_at IS NULL",
-        {"tid": test_id},
-    )
+async def get_exam(test_id: int, assessment_type: str = "exam") -> dict | None:
+    """Load an ``ap_exam`` row by the ``(assessment_type, test_id)`` it grades.
 
-
-async def assert_test_is_valid(test_id: int) -> None:
-    """Raise ``InvalidTestError`` unless ``test_id`` is a live row in the ``tests`` table.
-
-    The ``tests`` table is owned by the main app in the shared DB; a test is
-    "valid" when it exists and has not been soft-deleted (``deleted_at IS NULL``).
-    Guards ``register_exam`` against parsing a rubric for a non-existent or
-    deleted test (issue #11). ``InvalidTestError`` → HTTP 400 (``INVALID_TEST_ID``).
+    ``test_id`` is the source-table id — ``tests.id`` for exams,
+    ``docs_homework_test.id`` for homework, ``quiz.id`` for quizzes — so the row
+    is resolved by the composite key ``uq_ap_exam_type_test_id``, never by
+    ``test_id`` alone (a homework and an exam can share a number).
     """
     db = Database.get_instance()
+    return await db.query_one(
+        "SELECT * FROM ap_exam WHERE assessment_type = :atype AND test_id = :tid "
+        "AND deleted_at IS NULL",
+        {"atype": assessment_type, "tid": test_id},
+    )
+
+
+# The main-app source table each assessment_type is validated against. The values
+# are a fixed whitelist (never user input), so interpolating the table name into
+# the SQL below is injection-safe; the id is always a bound parameter.
+_SOURCE_TABLES: dict[str, str] = {
+    "exam": "tests",
+    "homework": "docs_homework_test",
+    "quiz": "quiz",
+}
+
+
+async def assert_source_is_valid(source_id: int, assessment_type: str = "exam") -> None:
+    """Raise ``InvalidTestError`` unless ``source_id`` is a live row in the source
+    table for ``assessment_type`` (``tests`` / ``docs_homework_test`` / ``quiz``).
+
+    Those tables are owned by the main app in the shared DB; a source is "valid"
+    when it exists and has not been soft-deleted (``deleted_at IS NULL``). Guards
+    ``register_exam`` against parsing a rubric for a non-existent or deleted source
+    (issue #11). ``InvalidTestError`` → HTTP 400 (``INVALID_TEST_ID``).
+    """
+    table = _SOURCE_TABLES[assessment_type]
+    db = Database.get_instance()
     row = await db.query_one(
-        "SELECT id FROM tests WHERE id = :test_id AND deleted_at IS NULL",
-        {"test_id": test_id},
+        f"SELECT id FROM {table} WHERE id = :id AND deleted_at IS NULL",
+        {"id": source_id},
     )
     if row is None:
-        raise InvalidTestError(f"test_id {test_id} is not a valid test (not found or deleted)")
+        # Preserve the exam surface's exact wording ("test_id … is not a valid test");
+        # homework/quiz get a type-specific message.
+        field = "test_id" if assessment_type == "exam" else f"{assessment_type} id"
+        noun = "test" if assessment_type == "exam" else assessment_type
+        raise InvalidTestError(f"{field} {source_id} is not a valid {noun} (not found or deleted)")
 
 
 def get_cached_rubric(exam_row: dict) -> ParsedRubric:
@@ -77,8 +100,9 @@ def _iso(value: Any) -> str | None:
     return str(value)
 
 
-async def list_exams(course_id: str | None = None) -> list[ExamSummary]:
-    """List registered exams (newest first), lightweight — never loads rubric_json.
+async def list_exams(course_id: str | None = None, assessment_type: str = "exam") -> list[ExamSummary]:
+    """List registered assessments of ``assessment_type`` (newest first), lightweight
+    — never loads rubric_json.
 
     Optional ``course_id`` filters to a single course.
     """
@@ -86,9 +110,9 @@ async def list_exams(course_id: str | None = None) -> list[ExamSummary]:
     sql = (
         "SELECT test_id, course_id, test_name, is_handwritten, total_points, "
         "parse_warnings, questions_pdf_url, marking_scheme_pdf_url, rubric_parsed_at, created_at "
-        "FROM ap_exam WHERE deleted_at IS NULL"
+        "FROM ap_exam WHERE assessment_type = :atype AND deleted_at IS NULL"
     )
-    params: dict[str, Any] = {}
+    params: dict[str, Any] = {"atype": assessment_type}
     if course_id:
         sql += " AND course_id = :course_id"
         params["course_id"] = course_id
@@ -126,24 +150,29 @@ async def list_exams(course_id: str | None = None) -> list[ExamSummary]:
 
 
 @observe(name="grader.register_exam", capture_input=False, capture_output=False)
-async def register_exam(req: RegisterExamRequest) -> RegisterExamResponse:
-    """Register an exam for a test_id, parsing + caching its rubric once.
+async def register_exam(req: RegisterExamRequest, assessment_type: str = "exam") -> RegisterExamResponse:
+    """Register an assessment for a ``(assessment_type, test_id)``, parsing + caching
+    its rubric once.
 
-    Idempotent: a repeat registration for the same ``test_id`` returns the cached
-    row without calling Gemini. To re-parse (e.g. a corrected marking scheme),
-    delete the existing row first.
+    ``assessment_type`` defaults to ``"exam"`` so the exam path is unchanged; the
+    ``/assessments`` surface passes ``"homework"`` / ``"quiz"``. ``req.test_id`` is
+    the source-table id for that type. Idempotent: a repeat registration for the same
+    ``(assessment_type, test_id)`` returns the cached row without calling Gemini. To
+    re-parse (e.g. a corrected marking scheme), delete the existing row first.
     """
     set_observation_input({
         "test_id": req.test_id,
+        "assessment_type": assessment_type,
         "course_id": req.course_id,
         "test_name": req.test_name,
         "is_handwritten": req.is_handwritten,
         "marking_scheme_pdf_url": req.marking_scheme_pdf_url,
     })
     set_trace_attributes(
-        tags=["grader", "rubric_parse", str(req.course_id)],
+        tags=["grader", "rubric_parse", assessment_type, str(req.course_id)],
         metadata={
             "test_id": req.test_id,
+            "assessment_type": assessment_type,
             "test_name": req.test_name,
             "course_id": req.course_id,
             "rubric_model": settings.grader_rubric_model,
@@ -151,13 +180,15 @@ async def register_exam(req: RegisterExamRequest) -> RegisterExamResponse:
     )
     db = Database.get_instance()
 
-    # issue #11: reject a test_id that isn't a live row in the main app's `tests`
-    # table (non-existent or soft-deleted) before any cache lookup or Gemini parse.
-    await assert_test_is_valid(req.test_id)
+    # issue #11: reject a source id that isn't a live row in the main app's source
+    # table for this type (non-existent or soft-deleted) before any cache lookup or
+    # Gemini parse.
+    await assert_source_is_valid(req.test_id, assessment_type)
 
-    # Idempotent on test_id: the first registration wins, so a cache hit echoes
-    # the stored row (course_id/test_name/subject all from what was persisted).
-    existing = await get_exam(req.test_id)
+    # Idempotent on (assessment_type, test_id): the first registration wins, so a
+    # cache hit echoes the stored row (course_id/test_name/subject all from what
+    # was persisted).
+    existing = await get_exam(req.test_id, assessment_type)
     if existing:
         rubric = get_cached_rubric(existing)
         course = await get_course_config(existing["course_id"])
@@ -208,18 +239,19 @@ async def register_exam(req: RegisterExamRequest) -> RegisterExamResponse:
     finally:
         pdf_path.unlink(missing_ok=True)
 
-    # Upsert keyed on the unique test_id. We only reach here when no *active*
-    # exam exists (an active one returns cached above), but a soft-deleted row
-    # (deleted_at set) still occupies test_id under uq_ap_exam_test_id — so a
-    # plain INSERT would hit a duplicate-key error on the documented
-    # delete-then-re-register flow. ON DUPLICATE KEY UPDATE re-parses and
-    # restores that row (deleted_at = NULL).
+    # Upsert keyed on the composite unique (assessment_type, test_id). We only
+    # reach here when no *active* row exists (an active one returns cached above),
+    # but a soft-deleted row (deleted_at set) still occupies that key under
+    # uq_ap_exam_type_test_id — so a plain INSERT would hit a duplicate-key error on
+    # the documented delete-then-re-register flow. ON DUPLICATE KEY UPDATE re-parses
+    # and restores that row (deleted_at = NULL). ``assessment_type`` is part of the
+    # key, so it is INSERTed but deliberately never in the UPDATE set.
     await db.write(
-        "INSERT INTO ap_exam (test_id, course_id, test_name, is_handwritten, rubric_json, "
-        "questions_pdf_url, marking_scheme_pdf_url, total_points, parse_warnings, "
-        "rubric_parsed_at) VALUES (:test_id, :course_id, :test_name, :is_handwritten, "
-        ":rubric_json, :questions_pdf_url, :marking_scheme_pdf_url, :total_points, "
-        ":parse_warnings, UTC_TIMESTAMP()) "
+        "INSERT INTO ap_exam (test_id, assessment_type, course_id, test_name, is_handwritten, "
+        "rubric_json, questions_pdf_url, marking_scheme_pdf_url, total_points, parse_warnings, "
+        "rubric_parsed_at) VALUES (:test_id, :assessment_type, :course_id, :test_name, "
+        ":is_handwritten, :rubric_json, :questions_pdf_url, :marking_scheme_pdf_url, "
+        ":total_points, :parse_warnings, UTC_TIMESTAMP()) "
         "ON DUPLICATE KEY UPDATE course_id=:course_id, test_name=:test_name, "
         "is_handwritten=:is_handwritten, rubric_json=:rubric_json, "
         "questions_pdf_url=:questions_pdf_url, marking_scheme_pdf_url=:marking_scheme_pdf_url, "
@@ -227,6 +259,7 @@ async def register_exam(req: RegisterExamRequest) -> RegisterExamResponse:
         "rubric_parsed_at=UTC_TIMESTAMP(), deleted_at=NULL",
         {
             "test_id": req.test_id,
+            "assessment_type": assessment_type,
             "course_id": req.course_id,
             "test_name": req.test_name,
             "is_handwritten": req.is_handwritten,

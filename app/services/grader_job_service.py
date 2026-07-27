@@ -37,6 +37,10 @@ from app.core.observability import (
     require_langfuse_active,
     set_trace_attributes,
 )
+from app.schemas.assessment_schema import (
+    AssessmentJobResponse,
+    AssessmentJobSummary,
+)
 from app.schemas.grader_schema import (
     CreateSubmissionRequest,
     GradedScorecardResponse,
@@ -77,26 +81,36 @@ def _iso(value: Any) -> str | None:
 
 # --- job creation + polling --------------------------------------------------
 
-async def create_job(test_id: int, req: CreateSubmissionRequest) -> str:
+async def create_job(test_id: int, req: CreateSubmissionRequest, assessment_type: str = "exam") -> str:
     """Insert a queued grading_job for one student submission; return its job_key.
 
-    Raises ``TestNotRegisteredError`` (404) / ``RubricNotGeneratedError`` (409) /
-    ``InvalidSubmissionError`` (400), each rendered as ``{error_code, detail}``.
+    ``assessment_type`` defaults to ``"exam"`` (the exam path is unchanged); the
+    ``/assessments`` surface passes ``"homework"`` / ``"quiz"`` and ``test_id`` is then
+    the source-table id. Raises ``TestNotRegisteredError`` (404) /
+    ``RubricNotGeneratedError`` (409) / ``InvalidSubmissionError`` (400), each rendered
+    as ``{error_code, detail}``.
     """
     db = Database.get_instance()
-    exam = await get_exam(test_id)
+    exam = await get_exam(test_id, assessment_type)
+    # Preserve the exam surface's exact wording; homework/quiz get a type-specific one.
+    field = "test_id" if assessment_type == "exam" else f"{assessment_type} id"
     if exam is None:
-        raise TestNotRegisteredError(f"test_id {test_id} is not registered")
-    # issue #11: the exam must actually be registered *with a generated rubric*
+        raise TestNotRegisteredError(f"{field} {test_id} is not registered")
+    # issue #11: the assessment must actually be registered *with a generated rubric*
     # before we accept a submission to grade against it.
     if not exam.get("rubric_json"):
-        raise RubricNotGeneratedError(f"test_id {test_id} is registered but its rubric is not generated yet")
+        raise RubricNotGeneratedError(
+            f"{field} {test_id} is registered but its rubric is not generated yet"
+        )
 
     is_handwritten = bool(exam["is_handwritten"])
+    # Keep the exam surface's exact wording ("... for handwritten exams"); the
+    # homework/quiz surface reads "... assessments".
+    noun = "exams" if assessment_type == "exam" else "assessments"
     if is_handwritten and not req.answers_pdf_url:
-        raise InvalidSubmissionError("answers_pdf_url is required for handwritten exams")
+        raise InvalidSubmissionError(f"answers_pdf_url is required for handwritten {noun}")
     if not is_handwritten and not req.answers:
-        raise InvalidSubmissionError("answers is required for typed exams")
+        raise InvalidSubmissionError(f"answers is required for typed {noun}")
 
     job_key = uuid.uuid4().hex
     await db.write(
@@ -116,6 +130,7 @@ async def create_job(test_id: int, req: CreateSubmissionRequest) -> str:
         "grader_job_created",
         job_key=job_key,
         test_id=test_id,
+        assessment_type=assessment_type,
         mode="handwritten" if is_handwritten else "typed",
     )
     return job_key
@@ -152,7 +167,7 @@ async def get_job(job_id: str) -> GradingJobResponse | None:
 
 
 async def list_jobs(
-    student_id: int | None = None, test_id: int | None = None
+    student_id: int | None = None, test_id: int | None = None, assessment_type: str = "exam"
 ) -> list[JobSummary]:
     """List grading jobs filtered by student_id and/or test_id (newest first).
 
@@ -167,9 +182,10 @@ async def list_jobs(
         "j.created_at, j.started_at, j.finished_at, j.error_message, "
         "e.test_id, e.test_name, "
         "CAST(JSON_EXTRACT(j.scorecard_json, '$.percentage') AS DECIMAL(5,2)) AS percentage "
-        "FROM grading_job j JOIN ap_exam e ON e.id = j.exam_id WHERE 1=1"
+        "FROM grading_job j JOIN ap_exam e ON e.id = j.exam_id "
+        "WHERE e.assessment_type = :atype"
     )
-    params: dict[str, Any] = {}
+    params: dict[str, Any] = {"atype": assessment_type}
     if student_id is not None:
         sql += " AND j.student_id = :student_id"
         params["student_id"] = student_id
@@ -189,6 +205,98 @@ async def list_jobs(
             review_required=bool(row["review_required"]),
             percentage=float(row["percentage"]) if row["percentage"] is not None else None,
             test_name=row.get("test_name"),
+            created_at=_iso(row.get("created_at")),
+            started_at=_iso(row.get("started_at")),
+            finished_at=_iso(row.get("finished_at")),
+            error=row.get("error_message"),
+        )
+        for row in rows
+    ]
+
+
+# --- assessment (homework/quiz) polling --------------------------------------
+# Mirror get_job / list_jobs but return the assessment-shaped envelopes
+# (source_id + assessment_type). Kept separate so the exam surface's models and
+# behaviour are untouched.
+
+async def get_assessment_job(job_id: str) -> AssessmentJobResponse | None:
+    """Load a homework/quiz job by its public job_key, hydrating the scorecard when ready.
+
+    Scoped to assessment rows (``assessment_type IN ('homework','quiz')``): an *exam*
+    job_key resolves to ``None`` here so the controller returns the documented 404
+    ``JOB_NOT_FOUND`` instead of the surface leaking an exam job — and so an
+    ``assessment_type='exam'`` row is never coerced into the ``homework|quiz``-only
+    ``AssessmentJobResponse`` model (which would raise a response-validation error).
+    """
+    db = Database.get_instance()
+    row = await db.query_one(
+        "SELECT j.*, e.test_id, e.assessment_type FROM grading_job j "
+        "JOIN ap_exam e ON e.id = j.exam_id "
+        "WHERE j.job_key = :k AND e.assessment_type IN ('homework', 'quiz')",
+        {"k": job_id},
+    )
+    if row is None:
+        return None
+
+    scorecard = None
+    if row.get("scorecard_json"):
+        scorecard = GradedScorecardResponse.model_validate_json(row["scorecard_json"])
+
+    return AssessmentJobResponse(
+        job_id=row["job_key"],
+        assessment_type=row["assessment_type"],
+        source_id=row["test_id"],
+        student_id=row["student_id"],
+        status=row["status"],
+        is_handwritten=bool(row["is_handwritten"]),
+        review_required=bool(row["review_required"]),
+        created_at=_iso(row.get("created_at")),
+        started_at=_iso(row.get("started_at")),
+        finished_at=_iso(row.get("finished_at")),
+        scorecard=scorecard,
+        error=row.get("error_message"),
+    )
+
+
+async def list_assessment_jobs(
+    assessment_type: str, student_id: int | None = None, source_id: int | None = None
+) -> list[AssessmentJobSummary]:
+    """List homework/quiz jobs of ``assessment_type`` by student_id and/or source_id (newest first).
+
+    Lightweight: only the score percentage is extracted in SQL (the large scorecard_json
+    blob is never transferred). At least one of student_id / source_id should be supplied
+    (the controller enforces this).
+    """
+    db = Database.get_instance()
+    sql = (
+        "SELECT j.job_key, j.student_id, j.status, j.is_handwritten, j.review_required, "
+        "j.created_at, j.started_at, j.finished_at, j.error_message, "
+        "e.test_id, e.test_name, e.assessment_type, "
+        "CAST(JSON_EXTRACT(j.scorecard_json, '$.percentage') AS DECIMAL(5,2)) AS percentage "
+        "FROM grading_job j JOIN ap_exam e ON e.id = j.exam_id "
+        "WHERE e.assessment_type = :atype"
+    )
+    params: dict[str, Any] = {"atype": assessment_type}
+    if student_id is not None:
+        sql += " AND j.student_id = :student_id"
+        params["student_id"] = student_id
+    if source_id is not None:
+        sql += " AND e.test_id = :source_id"
+        params["source_id"] = source_id
+    sql += " ORDER BY j.created_at DESC"
+    rows = await db.query(sql, params)
+
+    return [
+        AssessmentJobSummary(
+            job_id=row["job_key"],
+            assessment_type=row["assessment_type"],
+            source_id=row["test_id"],
+            student_id=row["student_id"],
+            status=row["status"],
+            is_handwritten=bool(row["is_handwritten"]),
+            review_required=bool(row["review_required"]),
+            percentage=float(row["percentage"]) if row["percentage"] is not None else None,
+            title=row.get("test_name"),
             created_at=_iso(row.get("created_at")),
             started_at=_iso(row.get("started_at")),
             finished_at=_iso(row.get("finished_at")),
@@ -281,9 +389,15 @@ async def _do_grade(job_key: str) -> None:
 
     set_trace_attributes(
         user_id=str(job["student_id"]),
-        tags=["grader", "handwritten" if is_handwritten else "typed", str(course_id)],
+        tags=[
+            "grader",
+            str(exam["assessment_type"]),
+            "handwritten" if is_handwritten else "typed",
+            str(course_id),
+        ],
         metadata={
             "test_id": exam["test_id"],
+            "assessment_type": exam["assessment_type"],
             "test_name": exam["test_name"],
             "course_id": course_id,
             "subject": subject,

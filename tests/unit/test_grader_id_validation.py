@@ -16,27 +16,27 @@ from app.core.errors import InvalidTestError, RubricNotGeneratedError, UnknownCo
 from app.schemas.grader_schema import CreateSubmissionRequest, RegisterExamRequest
 from app.services import grader_exam_service, grader_job_service
 
-# --- assert_test_is_valid ----------------------------------------------------
+# --- assert_source_is_valid --------------------------------------------------
 
-async def test_assert_test_is_valid_rejects_unknown_or_deleted_test():
+async def test_assert_source_is_valid_rejects_unknown_or_deleted_test():
     db = MagicMock()
     db.query_one = AsyncMock(return_value=None)  # no live `tests` row
     with (
         patch.object(grader_exam_service.Database, "get_instance", return_value=db),
         pytest.raises(InvalidTestError, match="not a valid test"),
     ):
-        await grader_exam_service.assert_test_is_valid(999)
+        await grader_exam_service.assert_source_is_valid(999)  # defaults to assessment_type="exam"
 
 
-async def test_assert_test_is_valid_accepts_live_test_and_filters_soft_deleted():
+async def test_assert_source_is_valid_accepts_live_test_and_filters_soft_deleted():
     db = MagicMock()
     db.query_one = AsyncMock(return_value={"id": 555})
     with patch.object(grader_exam_service.Database, "get_instance", return_value=db):
-        await grader_exam_service.assert_test_is_valid(555)  # must not raise
+        await grader_exam_service.assert_source_is_valid(555)  # must not raise (exam → `tests`)
     sql, params = db.query_one.call_args.args
     assert "FROM tests" in sql
     assert "deleted_at IS NULL" in sql  # valid == not soft-deleted
-    assert params == {"test_id": 555}
+    assert params == {"id": 555}
 
 
 # --- register_exam fails fast on an invalid test_id --------------------------
