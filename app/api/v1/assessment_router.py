@@ -137,14 +137,15 @@ _REGISTER_REQUEST_EXAMPLES = {
         },
     },
     "quiz": {
-        "summary": "Quiz (typed — questions_pdf_url not needed)",
+        "summary": "Quiz (handwritten — needs questions_pdf_url for OCR context)",
         "value": {
             "assessment_type": "quiz",
             "source_id": 869,
             "course_id": "30",
             "title": "Unit 3 Quiz",
-            "is_handwritten": False,
+            "is_handwritten": True,
             "marking_scheme_pdf_url": "https://papervideo.s3.ap-south-1.amazonaws.com/apguru/assets/marking_scheme/quiz-869.pdf",
+            "questions_pdf_url": "https://papervideo.s3.ap-south-1.amazonaws.com/apguru/assets/quiz/quiz-869.pdf",
         },
     },
 }
@@ -203,7 +204,7 @@ _SUBMISSION_REQUEST_EXAMPLES = {
     "typed": {
         "summary": "Typed submission (inline answers, no OCR)",
         "value": {
-            "assessment_type": "quiz",
+            "assessment_type": "homework",
             "student_id": 1001,
             "answers": {"1": "Mitochondria are the...", "2": "The independent variable is..."},
         },
