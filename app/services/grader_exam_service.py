@@ -1,7 +1,7 @@
 """Exam registration + cached-rubric access for the AP FRQ grader.
 
 ``register_exam`` parses the marking-scheme PDF with Gemini exactly once per exam
-and stores the ParsedRubric JSON in ``ap_exam``; a repeat registration returns
+and stores the ParsedRubric JSON in ``assessment_registry``; a repeat registration returns
 the cached row without calling Gemini. ``get_cached_rubric`` rehydrates that JSON
 for grading — never re-parsing.
 """
@@ -38,7 +38,7 @@ log = structlog.get_logger(__name__)
 
 
 async def get_exam(test_id: int, assessment_type: str = "exam") -> dict | None:
-    """Load an ``ap_exam`` row by the ``(assessment_type, test_id)`` it grades.
+    """Load an ``assessment_registry`` row by the ``(assessment_type, test_id)`` it grades.
 
     ``test_id`` is the source-table id — ``tests.id`` for exams,
     ``docs_homework_test.id`` for homework, ``quiz.id`` for quizzes — so the row
@@ -47,7 +47,7 @@ async def get_exam(test_id: int, assessment_type: str = "exam") -> dict | None:
     """
     db = Database.get_instance()
     return await db.query_one(
-        "SELECT * FROM ap_exam WHERE assessment_type = :atype AND test_id = :tid "
+        "SELECT * FROM assessment_registry WHERE assessment_type = :atype AND test_id = :tid "
         "AND deleted_at IS NULL",
         {"atype": assessment_type, "tid": test_id},
     )
@@ -110,7 +110,7 @@ async def list_exams(course_id: str | None = None, assessment_type: str = "exam"
     sql = (
         "SELECT test_id, course_id, test_name, is_handwritten, total_points, "
         "parse_warnings, questions_pdf_url, marking_scheme_pdf_url, rubric_parsed_at, created_at "
-        "FROM ap_exam WHERE assessment_type = :atype AND deleted_at IS NULL"
+        "FROM assessment_registry WHERE assessment_type = :atype AND deleted_at IS NULL"
     )
     params: dict[str, Any] = {"atype": assessment_type}
     if course_id:
@@ -247,7 +247,7 @@ async def register_exam(req: RegisterExamRequest, assessment_type: str = "exam")
     # and restores that row (deleted_at = NULL). ``assessment_type`` is part of the
     # key, so it is INSERTed but deliberately never in the UPDATE set.
     await db.write(
-        "INSERT INTO ap_exam (test_id, assessment_type, course_id, test_name, is_handwritten, "
+        "INSERT INTO assessment_registry (test_id, assessment_type, course_id, test_name, is_handwritten, "
         "rubric_json, questions_pdf_url, marking_scheme_pdf_url, total_points, parse_warnings, "
         "rubric_parsed_at) VALUES (:test_id, :assessment_type, :course_id, :test_name, "
         ":is_handwritten, :rubric_json, :questions_pdf_url, :marking_scheme_pdf_url, "

@@ -48,7 +48,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
 - Health check: `GET http://localhost:8080/api/v1/health`
 - Interactive API docs: `http://localhost:8080/docs`
 
-> **Database schema/migrations are not managed in this repo.** They live in [`apguru-centralized-alembic`](https://github.com/aryamangodara/apguru-centralized-alembic) — point that repo at your DB and run `alembic upgrade head` there to create `ap_exam` / `grading_job` / `course_configs`.
+> **Database schema/migrations are not managed in this repo.** They live in [`apguru-centralized-alembic`](https://github.com/aryamangodara/apguru-centralized-alembic) — point that repo at your DB and run `alembic upgrade head` there to create `assessment_registry` / `grading_job` / `course_configs`.
 
 ### Docker
 

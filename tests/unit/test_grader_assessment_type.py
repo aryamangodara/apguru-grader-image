@@ -3,7 +3,7 @@
 The grader was generalized from exams to assessments: ``get_exam`` / ``assert_source_is_valid`` /
 ``list_exams`` / ``register_exam`` / ``create_job`` / ``list_jobs`` now carry an ``assessment_type``
 (default ``"exam"``) that (a) selects the main-app source table validated against and (b) is part of
-the ``ap_exam`` composite key. The DB is mocked at the ``query_one`` / ``query`` / ``write`` boundary —
+the ``assessment_registry`` composite key. The DB is mocked at the ``query_one`` / ``query`` / ``write`` boundary —
 these assert the dispatch + SQL, not real SQL execution.
 """
 from __future__ import annotations
