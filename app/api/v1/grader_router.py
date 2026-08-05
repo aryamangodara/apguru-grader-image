@@ -318,6 +318,15 @@ async def create_submission(
     usual cause of ``INVALID_SUBMISSION`` — the endpoint validates the body against the
     stored mode, it does not infer the mode from which field you send.
 
+    **Typed answer-key reconciliation.** For typed exams the answer keys are reconciled
+    with the rubric by content. If they already match the rubric's question ids they're
+    used as-is; if they don't (a mis-keyed client), each answer is content-mapped onto
+    the question(s) it answers — those questions come back flagged for review with an
+    ``answer_mapping`` on the scorecard. If the answers can't be mapped confidently the
+    job **fails** (poll it: ``error`` is ``ANSWER_MAPPING_FAILED: …``) rather than return
+    a misleading 0. These are async outcomes surfaced on GET /jobs/{job_id}, not on this
+    202 response.
+
     Errors (all rendered as the ``{error_code, detail}`` envelope; see the example
     responses below):
 
@@ -357,6 +366,12 @@ async def get_job(
     job_id: Annotated[str, Path(description="The job_id returned when the submission was enqueued.")],
 ) -> GradingJobResponse:
     """Poll a grading job; the scorecard is present once status == 'succeeded'.
+
+    A typed job has two feature-specific outcomes worth handling: it may **succeed** with
+    an ``answer_mapping`` on the scorecard (and ``review_required=true``) when the
+    submitted answer keys had to be content-mapped onto the rubric's question ids, or
+    **fail** with ``error = "ANSWER_MAPPING_FAILED: …"`` when the answers couldn't be
+    mapped confidently.
 
     * **404 ``JOB_NOT_FOUND``** — no grading job matches ``job_id``.
     """

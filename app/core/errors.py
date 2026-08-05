@@ -39,6 +39,7 @@ class ErrorCode(StrEnum):
     INVALID_SUBMISSION = "INVALID_SUBMISSION"
     INVALID_PDF_URL = "INVALID_PDF_URL"
     MARKING_SCHEME_REQUIRED = "MARKING_SCHEME_REQUIRED"
+    ANSWER_MAPPING_FAILED = "ANSWER_MAPPING_FAILED"
     JOB_NOT_FOUND = "JOB_NOT_FOUND"
     MISSING_JOB_FILTER = "MISSING_JOB_FILTER"
     # Framework / generic
@@ -106,6 +107,15 @@ class MarkingSchemeRequiredError(GraderError):
     # exams and quizzes still require one.
     status_code = 400
     error_code = ErrorCode.MARKING_SCHEME_REQUIRED
+
+
+class AnswerMappingError(GraderError):
+    # Typed grading could not confidently content-map the submitted answers onto the
+    # rubric's questions (low confidence, a collision, or an answer matching nothing).
+    # Fail loud rather than emit a plausible-but-wrong score. Raised inside the async
+    # grade, so it surfaces as a failed job (error_message), not a synchronous 4xx.
+    status_code = 422
+    error_code = ErrorCode.ANSWER_MAPPING_FAILED
 
 
 class JobNotFoundError(GraderError):

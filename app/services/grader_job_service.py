@@ -28,6 +28,7 @@ from app.core.course_config import (
 )
 from app.core.database import Database
 from app.core.errors import (
+    GraderError,
     InvalidSubmissionError,
     RubricNotGeneratedError,
     TestNotRegisteredError,
@@ -61,6 +62,7 @@ from app.services.grader.fetch import fetch_pdf_to_tempfile
 from app.services.grader.response_builder import build_scorecard_response
 from app.services.grader.schemas import Scorecard
 from app.services.grader.tracing import gemini_generation_reporter
+from app.services.grader_answer_map_service import RemapResult, remap_typed_answers
 from app.services.grader_exam_service import get_cached_rubric, get_exam, is_rubric_free
 from app.services.grader_knowledge_service import grade_knowledge_submission
 from app.services.grader_prompts import grade_prompt_for
@@ -349,10 +351,18 @@ async def run_grading_job(job_key: str) -> None:
             await _do_grade(job_key)
         except Exception as exc:
             log.exception("grader_job_failed", job_key=job_key)
+            # Prefix a typed GraderError with its stable code so the job's `error` field is
+            # machine-readable (e.g. "ANSWER_MAPPING_FAILED: ..."), mirroring the
+            # {error_code, detail} envelope that synchronous endpoints return.
+            message = (
+                f"{exc.error_code.value}: {exc.message}"
+                if isinstance(exc, GraderError)
+                else str(exc)
+            )
             await db.write(
                 "UPDATE grading_job SET status='failed', error_message=:e, "
                 "finished_at=UTC_TIMESTAMP() WHERE job_key=:k",
-                {"k": job_key, "e": str(exc)[:2000]},
+                {"k": job_key, "e": message[:2000]},
             )
 
 
@@ -464,11 +474,18 @@ async def _do_grade(job_key: str) -> None:
     answers_pdf_url = job.get("answers_pdf_url")
     page_count: int | None = None
     ai_labelled: list[str] = []
+    # Rubric qids whose answer was content-mapped from a mismatched key (typed only);
+    # flag them for review, and record the applied mapping on the scorecard.
+    remapped_qids: list[str] = []
+    answer_mapping = None
 
     if is_handwritten:
         submission, page_count = await _build_handwritten_submission(client, exam, job, ocr_addendum)
     else:
-        submission, ai_labelled = await _build_typed_submission(client, exam, job, rubric)
+        submission, ai_labelled, remap = await _build_typed_submission(client, exam, job, rubric)
+        remapped_qids = remap.remapped_qids
+        if remap.remapped:
+            answer_mapping = remap.applied_map
 
     result = await asyncio.to_thread(
         grade_submission,
@@ -483,7 +500,7 @@ async def _do_grade(job_key: str) -> None:
         model_grading=settings.grader_grading_model,
         grading_max_workers=settings.grader_grading_max_workers,
         low_confidence_threshold=settings.grader_low_confidence_threshold,
-        force_review_qids=set(ai_labelled) or None,
+        force_review_qids=set(ai_labelled) | set(remapped_qids) or None,
         on_response=gemini_generation_reporter("grader.grade", settings.grader_grading_model),
     )
 
@@ -503,6 +520,9 @@ async def _do_grade(job_key: str) -> None:
         answers_pdf_url=answers_pdf_url,
         page_count=page_count,
     )
+    # Surface the applied answer->question mapping (typed mis-keyed submissions only;
+    # None on the normal path). The remapped questions are already review-flagged above.
+    response.answer_mapping = answer_mapping
     _record_job_output(scorecard)
 
     # issue #14: attach best-effort, Langfuse-traced audience summaries to the scorecard.
@@ -554,20 +574,29 @@ def _ocr_blocking(client, q_path, ans_path, ocr_addendum):
     return submission, len(a_imgs)
 
 
-async def _build_typed_submission(client, exam, job, rubric):
+async def _build_typed_submission(
+    client, exam, job, rubric
+) -> tuple[Any, list[str], RemapResult]:
     """Build the submission for a typed exam from inline answers — no OCR, no DB fetch.
 
-    ``answers_json`` is the submission's ``{major_question_id: answer_text}`` dict;
-    keys are normalized to the rubric's canonical form before labelling.
+    ``answers_json`` is the submission's ``{question_id: answer_text}`` dict. Keys are
+    normalized, then reconciled with the rubric: when they don't match the rubric's
+    question ids, ``remap_typed_answers`` content-maps each answer onto the question(s)
+    it answers (or fails the job loudly). The reconciled dict is then labelled by
+    sub-part as usual. Returns ``(submission, ai_labelled_qids, remap)``.
     """
     raw = job.get("answers_json")
     answers = json.loads(raw) if isinstance(raw, str) else (raw or {})
     answers_by_major = {_normalize_qid(str(qid)): text for qid, text in answers.items()}
 
-    return await asyncio.to_thread(
+    remap = await asyncio.to_thread(
+        remap_typed_answers, client, answers_by_major=answers_by_major, rubric=rubric
+    )
+
+    submission, ai_labelled = await asyncio.to_thread(
         label_typed_answers,
         client,
-        answers_by_major=answers_by_major,
+        answers_by_major=remap.answers_by_major,
         rubric=rubric,
         prompt_path=SEGMENT_TYPED_PROMPT,
         model=settings.grader_typed_label_model,
@@ -575,6 +604,7 @@ async def _build_typed_submission(client, exam, job, rubric):
             "grader.typed_label", settings.grader_typed_label_model
         ),
     )
+    return submission, ai_labelled, remap
 
 
 def _record_job_output(scorecard: Scorecard) -> None:

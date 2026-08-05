@@ -186,6 +186,21 @@ class QuestionMarks(BaseModel):
         return int(value) if value == int(value) else value
 
 
+class AppliedAnswerMap(BaseModel):
+    """Records one submitted answer that had to be content-mapped onto rubric question(s).
+
+    Present on the scorecard only when the submitted answer keys did NOT match the
+    rubric's question ids and the grader matched answers to questions by content (see
+    ``answer_mapping`` on :class:`GradedScorecardResponse`).
+    """
+
+    submitted_key: str = Field(description="The key the answer was submitted under (e.g. '21').")
+    mapped_question_ids: list[str] = Field(
+        description="Rubric question id(s) this answer was matched to and graded against."
+    )
+    confidence: float = Field(description="Model confidence in this match, in [0.0, 1.0].")
+
+
 class GradedScorecardResponse(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
@@ -281,6 +296,15 @@ class GradedScorecardResponse(BaseModel):
     unattempted: list[GradedQuestion] = Field(
         default_factory=list, description="Questions with no answer found (scored 0/max)."
     )
+    answer_mapping: list[AppliedAnswerMap] | None = Field(
+        default=None,
+        description="Present ONLY when the submitted typed answer keys did not match the rubric's "
+        "question ids and the grader content-mapped each answer onto the question(s) it answers. "
+        "Each entry records which rubric question(s) an answer was graded against, and the match "
+        "confidence. When present, the affected questions are also flagged for human review "
+        "(review_required=true) and the client should be fixed to key answers by rubric id. Null on "
+        "the normal path where the keys already matched.",
+    )
     # issue #14: post-grading audience summaries (empty when disabled or on failure).
     student_summary: str = Field(
         default="",
@@ -317,7 +341,12 @@ class GradingJobResponse(BaseModel):
     scorecard: GradedScorecardResponse | None = Field(
         default=None, description="Present once status == 'succeeded'."
     )
-    error: str | None = Field(default=None, description="Present once status == 'failed'.")
+    error: str | None = Field(
+        default=None,
+        description="Present once status == 'failed'. A typed submission whose answers can't be "
+        "content-mapped to the rubric fails here with 'ANSWER_MAPPING_FAILED: <detail>' (the stable "
+        "code is prefixed so consumers can branch on it).",
+    )
 
 
 class JobSummary(BaseModel):
@@ -339,7 +368,12 @@ class JobSummary(BaseModel):
     created_at: str | None = Field(default=None, description="ISO-8601 time the job was enqueued.")
     started_at: str | None = Field(default=None, description="ISO-8601 time grading started, if begun.")
     finished_at: str | None = Field(default=None, description="ISO-8601 time grading finished, if done.")
-    error: str | None = Field(default=None, description="Present once status == 'failed'.")
+    error: str | None = Field(
+        default=None,
+        description="Present once status == 'failed'. A typed submission whose answers can't be "
+        "content-mapped to the rubric fails here with 'ANSWER_MAPPING_FAILED: <detail>' (the stable "
+        "code is prefixed so consumers can branch on it).",
+    )
 
 
 class JobListResponse(BaseModel):

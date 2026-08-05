@@ -72,6 +72,16 @@ class Settings(BaseSettings):
     # Homework graded WITHOUT a marking scheme: the model judges each answer
     # right/wrong from its own subject knowledge (one call per submission).
     grader_knowledge_model: str = Field(default="gemini-3.5-flash")
+    # Typed FRQ answer -> rubric-question content mapping. When a typed submission's
+    # answer keys don't match the rubric's question ids (a mis-keyed client), one
+    # extra Gemini call matches each answer to the question(s) it addresses by
+    # content, so the grade lands on the right questions instead of silently scoring
+    # 0. Disable to fall back to strict key matching. The mapping fails the job
+    # (fail-loud) if any answer maps below the confidence threshold, collides with
+    # another, or matches nothing — never a plausible-but-wrong score.
+    grader_enable_answer_map: bool = Field(default=True)
+    grader_answer_map_model: str = Field(default="gemini-3.5-flash")
+    grader_answer_map_min_confidence: float = Field(default=0.7)
     grader_ocr_dpi: int = Field(default=300)
     grader_ocr_thinking_level: str = Field(default="low")
     grader_grading_max_workers: int = Field(default=8)
