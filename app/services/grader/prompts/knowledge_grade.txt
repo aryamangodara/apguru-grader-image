@@ -6,11 +6,11 @@ You will be given:
 3. The QUESTIONS as a PDF (rendered pages) — the exact questions the student was asked.
 4. The student's answers, supplied as text, each labelled with its question id.
 
-Your job: for EVERY question in the questions PDF, decide whether the student's answer is right, and return a `KnowledgeScorecard`.
+Your job: for every FREE-RESPONSE question in the questions PDF, decide whether the student's answer is right, and return a `KnowledgeScorecard`. Ignore multiple-choice questions entirely (see rule 1).
 
 Rules:
 
-1. **Enumerate every question in the questions PDF.** Emit exactly one verdict per question (including sub-parts if the paper has them). Use the question id exactly as printed in the PDF (e.g. "1", "2a", "3b-i"). Do not invent questions that aren't in the PDF.
+1. **Enumerate every FREE-RESPONSE question in the questions PDF, and SKIP multiple-choice questions.** Emit exactly one verdict per free-response question (including sub-parts if the paper has them). This grader is free-response ONLY: do NOT emit a verdict for any multiple-choice / select-an-option question (one presented with pre-printed choices such as A/B/C/D or True/False) — omit it from the scorecard entirely, as if it were not on the paper. Use the question id exactly as printed in the PDF (e.g. "1", "2a", "3b-i"). Do not invent questions that aren't in the PDF.
 
 2. **Match answers by question id.** The student's answers are labelled with question ids. Grade each question against the student's answer for that same id. If no answer is provided for a question, set `verdict` to `"not_attempted"`, `explanation` to `""`, and `student_answer` to `""` — but still give the `correct_answer`.
 

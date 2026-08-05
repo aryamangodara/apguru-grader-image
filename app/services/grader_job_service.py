@@ -63,7 +63,12 @@ from app.services.grader.response_builder import build_scorecard_response
 from app.services.grader.schemas import Scorecard
 from app.services.grader.tracing import gemini_generation_reporter
 from app.services.grader_answer_map_service import RemapResult, remap_typed_answers
-from app.services.grader_exam_service import get_cached_rubric, get_exam, is_rubric_free
+from app.services.grader_exam_service import (
+    drop_mcq_questions,
+    get_cached_rubric,
+    get_exam,
+    is_rubric_free,
+)
 from app.services.grader_knowledge_service import grade_knowledge_submission
 from app.services.grader_prompts import grade_prompt_for
 from app.services.grader_summaries import build_summary_view, generate_audience_summaries
@@ -471,6 +476,20 @@ async def _do_grade(job_key: str) -> None:
         return
 
     rubric = get_cached_rubric(exam)
+    # Grader is FRQ-only: strip any multiple-choice questions before grading so they are
+    # never scored, shown on the scorecard, counted in the denominator, or targeted by the
+    # answer auto-map. Filters a copy — the stored rubric_json is untouched.
+    rubric, dropped_mcq_qids = drop_mcq_questions(rubric)
+    if dropped_mcq_qids:
+        log.info(
+            "grader_dropped_mcq_questions",
+            job_key=job_key, count=len(dropped_mcq_qids), qids=dropped_mcq_qids,
+        )
+    if not rubric.questions:
+        raise InvalidSubmissionError(
+            "assessment has no free-response questions to grade "
+            "(all questions are multiple-choice; the grader is FRQ-only)"
+        )
     answers_pdf_url = job.get("answers_pdf_url")
     page_count: int | None = None
     ai_labelled: list[str] = []

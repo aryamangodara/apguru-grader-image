@@ -2,6 +2,8 @@
 
 An async **FastAPI** backend that auto-grades **AP® Free-Response Questions (FRQ)**. You register an exam once (its marking-scheme PDF is parsed into a structured rubric and cached), submit a student's answers — as a PDF for handwritten exams or inline JSON for typed exams — and the service grades them against the rubric and returns a point-by-point scorecard.
 
+> **Free-response only.** The grader grades FRQs, never multiple-choice. Any MCQs present in a marking scheme are stripped from the rubric before grading (so they're never scored, shown, or counted in the denominator), and in rubric-free "knowledge" homework the model is told to skip them. This applies to every assessment type (exam / homework / quiz).
+
 - **LLM:** Google **Gemini**, called through **Vertex AI** (default) or the AI Studio API key.
 - **Data:** MySQL (async, via SQLAlchemy + aiomysql).
 - **PDF:** PyMuPDF renders answer pages to images for OCR; Pillow handles the images.
