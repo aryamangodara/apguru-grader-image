@@ -38,6 +38,7 @@ class ErrorCode(StrEnum):
     UNKNOWN_COURSE = "UNKNOWN_COURSE"
     INVALID_SUBMISSION = "INVALID_SUBMISSION"
     INVALID_PDF_URL = "INVALID_PDF_URL"
+    MARKING_SCHEME_REQUIRED = "MARKING_SCHEME_REQUIRED"
     JOB_NOT_FOUND = "JOB_NOT_FOUND"
     MISSING_JOB_FILTER = "MISSING_JOB_FILTER"
     # Framework / generic
@@ -98,6 +99,13 @@ class InvalidSubmissionError(GraderError):
 class InvalidPdfUrlError(GraderError):
     status_code = 400
     error_code = ErrorCode.INVALID_PDF_URL
+
+
+class MarkingSchemeRequiredError(GraderError):
+    # Only homework may register without a marking scheme (graded by AI knowledge);
+    # exams and quizzes still require one.
+    status_code = 400
+    error_code = ErrorCode.MARKING_SCHEME_REQUIRED
 
 
 class JobNotFoundError(GraderError):

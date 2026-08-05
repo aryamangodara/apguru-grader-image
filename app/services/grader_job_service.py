@@ -61,7 +61,8 @@ from app.services.grader.fetch import fetch_pdf_to_tempfile
 from app.services.grader.response_builder import build_scorecard_response
 from app.services.grader.schemas import Scorecard
 from app.services.grader.tracing import gemini_generation_reporter
-from app.services.grader_exam_service import get_cached_rubric, get_exam
+from app.services.grader_exam_service import get_cached_rubric, get_exam, is_rubric_free
+from app.services.grader_knowledge_service import grade_knowledge_submission
 from app.services.grader_prompts import grade_prompt_for
 from app.services.grader_summaries import build_summary_view, generate_audience_summaries
 
@@ -268,10 +269,16 @@ async def list_assessment_jobs(
     (the controller enforces this).
     """
     db = Database.get_instance()
+    # Extract the lightweight score fields from scorecard_json in SQL (never transfer the
+    # big blob). 'knowledge'-mode homework has no marks — its percentage is a placeholder 0,
+    # so we surface grading_mode + correct_count/questions_total and null the percentage below.
     sql = (
         "SELECT j.job_key, j.student_id, j.status, j.is_handwritten, j.review_required, "
         "j.created_at, j.started_at, j.finished_at, j.error_message, "
         "e.test_id, e.test_name, e.assessment_type, "
+        "JSON_UNQUOTE(JSON_EXTRACT(j.scorecard_json, '$.grading_mode')) AS grading_mode, "
+        "CAST(JSON_EXTRACT(j.scorecard_json, '$.correct_count') AS SIGNED) AS correct_count, "
+        "CAST(JSON_EXTRACT(j.scorecard_json, '$.questions_total') AS SIGNED) AS questions_total, "
         "CAST(JSON_EXTRACT(j.scorecard_json, '$.percentage') AS DECIMAL(5,2)) AS percentage "
         "FROM grading_job j JOIN assessment_registry e ON e.id = j.exam_id "
         "WHERE e.assessment_type = :atype"
@@ -286,24 +293,39 @@ async def list_assessment_jobs(
     sql += " ORDER BY j.created_at DESC"
     rows = await db.query(sql, params)
 
-    return [
-        AssessmentJobSummary(
-            job_id=row["job_key"],
-            assessment_type=row["assessment_type"],
-            source_id=row["test_id"],
-            student_id=row["student_id"],
-            status=row["status"],
-            is_handwritten=bool(row["is_handwritten"]),
-            review_required=bool(row["review_required"]),
-            percentage=float(row["percentage"]) if row["percentage"] is not None else None,
-            title=row.get("test_name"),
-            created_at=_iso(row.get("created_at")),
-            started_at=_iso(row.get("started_at")),
-            finished_at=_iso(row.get("finished_at")),
-            error=row.get("error_message"),
+    summaries: list[AssessmentJobSummary] = []
+    for row in rows:
+        is_knowledge = row.get("grading_mode") == "knowledge"
+        summaries.append(
+            AssessmentJobSummary(
+                job_id=row["job_key"],
+                assessment_type=row["assessment_type"],
+                source_id=row["test_id"],
+                student_id=row["student_id"],
+                status=row["status"],
+                is_handwritten=bool(row["is_handwritten"]),
+                review_required=bool(row["review_required"]),
+                # No marks in knowledge mode — omit the placeholder 0 percentage.
+                percentage=(
+                    None
+                    if is_knowledge or row["percentage"] is None
+                    else float(row["percentage"])
+                ),
+                grading_mode=row.get("grading_mode"),
+                correct_count=(
+                    int(row["correct_count"]) if row.get("correct_count") is not None else None
+                ),
+                questions_total=(
+                    int(row["questions_total"]) if row.get("questions_total") is not None else None
+                ),
+                title=row.get("test_name"),
+                created_at=_iso(row.get("created_at")),
+                started_at=_iso(row.get("started_at")),
+                finished_at=_iso(row.get("finished_at")),
+                error=row.get("error_message"),
+            )
         )
-        for row in rows
-    ]
+    return summaries
 
 
 # --- the worker --------------------------------------------------------------
@@ -379,7 +401,6 @@ async def _do_grade(job_key: str) -> None:
     job = await db.query_one("SELECT * FROM grading_job WHERE job_key=:k", {"k": job_key})
     exam = await db.query_one("SELECT * FROM assessment_registry WHERE id=:id", {"id": job["exam_id"]})
 
-    rubric = get_cached_rubric(exam)
     course_id = exam["course_id"]
     course = await get_course_config(course_id)
     subject = course.get("course_name") or course_id
@@ -411,6 +432,35 @@ async def _do_grade(job_key: str) -> None:
     )
 
     client = get_gemini_client(prefer_vertex=settings.grader_use_vertex)
+
+    # Rubric-free homework (registered without a marking scheme): grade from the model's
+    # own knowledge — right/wrong per question, no marks. Bypasses the rubric grade path
+    # (grade_submission / build_scorecard_response / summaries) entirely.
+    if is_rubric_free(exam):
+        response, review_required = await grade_knowledge_submission(
+            client,
+            exam=exam,
+            job=job,
+            subject=subject,
+            grading_addendum=grading_addendum,
+            ocr_addendum=ocr_addendum,
+        )
+        _record_knowledge_output(response)
+        await db.write(
+            "UPDATE grading_job SET status='succeeded', scorecard_json=:s, review_required=:r, "
+            "finished_at=UTC_TIMESTAMP() WHERE job_key=:k",
+            {"k": job_key, "s": response.model_dump_json(), "r": 1 if review_required else 0},
+        )
+        log.info(
+            "grader_job_succeeded",
+            job_key=job_key,
+            grading_mode="knowledge",
+            correct_count=response.correct_count,
+            questions_total=response.questions_total,
+        )
+        return
+
+    rubric = get_cached_rubric(exam)
     answers_pdf_url = job.get("answers_pdf_url")
     page_count: int | None = None
     ai_labelled: list[str] = []
@@ -542,6 +592,20 @@ def _record_job_output(scorecard: Scorecard) -> None:
             for q in scorecard.questions
         }
     record_trace_output(out)
+
+
+def _record_knowledge_output(response: GradedScorecardResponse) -> None:
+    """Record the rubric-free (knowledge) grade summary as the grader.job trace output."""
+    record_trace_output(
+        {
+            "grading_mode": "knowledge",
+            "correct_count": response.correct_count,
+            "questions_total": response.questions_total,
+            "questions_graded": response.questions_graded,
+            "review_flag_count": len(response.review_flags),
+            "verdicts": {q.question_id: q.verdict for q in response.questions},
+        }
+    )
 
 
 # --- durability --------------------------------------------------------------

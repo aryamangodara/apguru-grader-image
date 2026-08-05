@@ -18,7 +18,12 @@ from langfuse import observe
 from app.core.config import settings
 from app.core.course_config import get_course_config
 from app.core.database import Database
-from app.core.errors import InvalidPdfUrlError, InvalidTestError, UnknownCourseError
+from app.core.errors import (
+    InvalidPdfUrlError,
+    InvalidTestError,
+    MarkingSchemeRequiredError,
+    UnknownCourseError,
+)
 from app.core.observability import (
     require_langfuse_active,
     set_observation_input,
@@ -89,6 +94,17 @@ async def assert_source_is_valid(source_id: int, assessment_type: str = "exam") 
 def get_cached_rubric(exam_row: dict) -> ParsedRubric:
     """Rehydrate the cached ParsedRubric for an exam — no Gemini call."""
     return ParsedRubric.model_validate_json(exam_row["rubric_json"])
+
+
+def is_rubric_free(exam_row: dict) -> bool:
+    """True if this registry row is a homework registered WITHOUT a marking scheme.
+
+    Such rows carry only an empty placeholder rubric and are graded from the model's own
+    subject knowledge (right/wrong per question, no marks) via ``grader_knowledge_service``,
+    never against a rubric. Detected from the marking-scheme URL being absent (+ the
+    homework type), never from the stored rubric being empty.
+    """
+    return exam_row.get("assessment_type") == "homework" and not exam_row.get("marking_scheme_pdf_url")
 
 
 def _iso(value: Any) -> str | None:
@@ -208,36 +224,61 @@ async def register_exam(req: RegisterExamRequest, assessment_type: str = "exam")
     course = await get_course_config(req.course_id)
     subject = course.get("course_name") or req.course_id
 
-    # Langfuse is mandatory — never parse a rubric (an LLM call) untraced. Guard
-    # here, after the cache-hit early return above (a cache hit makes no LLM call).
-    require_langfuse_active()
+    # Only homework may register WITHOUT a marking scheme (graded from the model's own
+    # knowledge — right/wrong, no marks). Exams and quizzes still require one; reject early
+    # with a typed error (a bare ValueError would surface as a 500). The /assessments surface
+    # also blocks a quiz here at request-validation (422); this defends the exam surface too.
+    if assessment_type != "homework" and not req.marking_scheme_pdf_url:
+        raise MarkingSchemeRequiredError(
+            f"marking_scheme_pdf_url is required for {assessment_type} registration"
+        )
 
-    # Parse the marking scheme once (offload the blocking Gemini call to a thread).
-    # The vendored parse_rubric_pdf still takes year/set_label as LLM context: year
-    # is unused post-refactor (pass 0); test_name flows in as the set label.
-    client = get_gemini_client(prefer_vertex=settings.grader_use_vertex)
-    try:
-        pdf_path = await fetch_pdf_to_tempfile(req.marking_scheme_pdf_url)
-    except ValueError as exc:
-        # Translate the vendored SSRF/URL guard's ValueError into a typed, coded
-        # error at the app boundary (keeps grader/url_guard.py + fetch.py untouched).
-        raise InvalidPdfUrlError(str(exc)) from exc
-    try:
-        rubric = await asyncio.to_thread(
-            parse_rubric_pdf,
-            client,
-            pdf_path,
+    if req.marking_scheme_pdf_url:
+        # Langfuse is mandatory — never parse a rubric (an LLM call) untraced. Guard
+        # here, after the cache-hit early return above (a cache hit makes no LLM call).
+        require_langfuse_active()
+
+        # Parse the marking scheme once (offload the blocking Gemini call to a thread).
+        # The vendored parse_rubric_pdf still takes year/set_label as LLM context: year
+        # is unused post-refactor (pass 0); test_name flows in as the set label.
+        client = get_gemini_client(prefer_vertex=settings.grader_use_vertex)
+        try:
+            pdf_path = await fetch_pdf_to_tempfile(req.marking_scheme_pdf_url)
+        except ValueError as exc:
+            # Translate the vendored SSRF/URL guard's ValueError into a typed, coded
+            # error at the app boundary (keeps grader/url_guard.py + fetch.py untouched).
+            raise InvalidPdfUrlError(str(exc)) from exc
+        try:
+            rubric = await asyncio.to_thread(
+                parse_rubric_pdf,
+                client,
+                pdf_path,
+                subject=subject,
+                year=0,
+                set_label=req.test_name,
+                prompt_path=rubric_prompt_for(course.get("exam_body")),
+                model=settings.grader_rubric_model,
+                on_response=gemini_generation_reporter(
+                    "grader.rubric_parse", settings.grader_rubric_model
+                ),
+            )
+        finally:
+            pdf_path.unlink(missing_ok=True)
+    else:
+        # Rubric-free homework: no marking scheme → no rubric parse (no Gemini call, hence no
+        # Langfuse guard). Store an EMPTY rubric so the NOT-NULL rubric_json column, the cached-
+        # rubric rehydration, and the create_job gate all keep working unchanged; grading routes
+        # to the knowledge path (grader_knowledge_service), which never reads this rubric.
+        rubric = ParsedRubric(
             subject=subject,
             year=0,
-            set_label=req.test_name,
-            prompt_path=rubric_prompt_for(course.get("exam_body")),
-            model=settings.grader_rubric_model,
-            on_response=gemini_generation_reporter(
-                "grader.rubric_parse", settings.grader_rubric_model
-            ),
+            total_points=0.0,
+            questions=[],
+            parse_warnings=[
+                "Registered without a marking scheme — graded from the model's own "
+                "knowledge (right/wrong per question, no marks)."
+            ],
         )
-    finally:
-        pdf_path.unlink(missing_ok=True)
 
     # Upsert keyed on the composite unique (assessment_type, test_id). We only
     # reach here when no *active* row exists (an active one returns cached above),

@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     grader_rubric_model: str = Field(default="gemini-3.5-flash")
     grader_grading_model: str = Field(default="gemini-3.5-flash")
     grader_typed_label_model: str = Field(default="gemini-3.5-flash")
+    # Homework graded WITHOUT a marking scheme: the model judges each answer
+    # right/wrong from its own subject knowledge (one call per submission).
+    grader_knowledge_model: str = Field(default="gemini-3.5-flash")
     grader_ocr_dpi: int = Field(default=300)
     grader_ocr_thinking_level: str = Field(default="low")
     grader_grading_max_workers: int = Field(default=8)

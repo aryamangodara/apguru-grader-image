@@ -152,3 +152,48 @@ class Scorecard(BaseModel):
     review_flags: list[str] = Field(default_factory=list)
     generated_at: str
     config_echo: dict[str, Any] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Knowledge grading — rubric-free (homework graded from the model's own knowledge)
+# ---------------------------------------------------------------------------
+
+class KnowledgeAnswerVerdict(BaseModel):
+    """One question's right/wrong verdict when grading WITHOUT a marking scheme.
+
+    Used for homework registered without a marking scheme: the model reads the
+    question (from the questions PDF) and the student's answer, then decides
+    correctness from its own subject knowledge — no rubric, no marks.
+    """
+    question_id: str = Field(
+        description="Question/sub-part identifier exactly as it appears in the questions PDF, e.g. '1', '2a'."
+    )
+    verdict: Literal["correct", "incorrect", "partial", "not_attempted"] = Field(
+        description=(
+            "Whether the student's answer is right: 'correct' = fully right; "
+            "'partial' = partially right or incomplete; 'incorrect' = wrong; "
+            "'not_attempted' = the student gave no answer for this question."
+        )
+    )
+    explanation: str = Field(
+        description=(
+            "1-2 sentences grounded in what the student actually wrote, explaining why "
+            "the answer is right, partially right, or wrong. Empty if not attempted."
+        )
+    )
+    correct_answer: str = Field(
+        description="The correct/model answer to this question, from the grader's own subject knowledge."
+    )
+    student_answer: str = Field(
+        description="The student's answer that was judged, echoed for audit ('' if not attempted)."
+    )
+    confidence: Literal["high", "medium", "low"] = Field(
+        description="The grader's confidence in this verdict."
+    )
+
+
+class KnowledgeScorecard(BaseModel):
+    """Gemini response schema for rubric-free grading: one verdict per question."""
+    answers: list[KnowledgeAnswerVerdict] = Field(
+        description="One verdict per question found in the questions PDF, in question order."
+    )

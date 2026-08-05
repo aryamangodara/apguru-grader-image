@@ -136,6 +136,17 @@ _REGISTER_REQUEST_EXAMPLES = {
             "questions_pdf_url": "https://papervideo.s3.ap-south-1.amazonaws.com/apguru/assets/homework/hw-211.pdf",
         },
     },
+    "homework_no_marking_scheme": {
+        "summary": "Homework WITHOUT a marking scheme (graded by AI knowledge — right/wrong, no marks)",
+        "value": {
+            "assessment_type": "homework",
+            "source_id": 212,
+            "course_id": "16",
+            "title": "Chapter 6 Homework",
+            "is_handwritten": False,
+            "questions_pdf_url": "https://papervideo.s3.ap-south-1.amazonaws.com/apguru/assets/homework/hw-212.pdf",
+        },
+    },
     "quiz": {
         "summary": "Quiz (handwritten — needs questions_pdf_url for OCR context)",
         "value": {
@@ -268,13 +279,19 @@ async def register_assessment(
     one-time Gemini call, and a repeat registration for the same ``(assessment_type, source_id)``
     returns the cached row without re-parsing. Handwritten assessments also need ``questions_pdf_url``.
 
+    **Homework may be registered WITHOUT ``marking_scheme_pdf_url``** — it is then graded from the
+    model's own subject knowledge (right/wrong per question with the correct answer, no marks; the
+    scorecard comes back with ``grading_mode="knowledge"``). In that case ``questions_pdf_url`` is
+    required (typed too), so the model can see each question. Quizzes still require a marking scheme.
+
     Errors (all rendered as the ``{error_code, detail}`` envelope; see the example responses):
 
     * **400 ``INVALID_TEST_ID``** — ``source_id`` isn't a live row in the source table
       (``docs_homework_test`` for homework, ``quiz`` for quiz).
     * **400 ``UNKNOWN_COURSE``** — ``course_id`` has no ``course_configs`` row.
     * **400 ``INVALID_PDF_URL``** — a supplied PDF URL is unfetchable / SSRF-blocked.
-    * **422** — request validation (e.g. handwritten assessment missing ``questions_pdf_url``).
+    * **422** — request validation (e.g. handwritten assessment missing ``questions_pdf_url``; a quiz,
+      or homework graded without a marking scheme, missing the PDFs it needs).
     """
     return await assessment_controller.register_assessment(body)
 
