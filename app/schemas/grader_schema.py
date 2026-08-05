@@ -46,7 +46,12 @@ class RegisterExamRequest(BaseModel):
         description="True = handwritten (answers from a PDF, OCR'd); False = typed "
         "(answers supplied inline at submission time)."
     )
-    marking_scheme_pdf_url: str = Field(description="Durable URL to the marking-scheme PDF.")
+    marking_scheme_pdf_url: str | None = Field(
+        default=None,
+        description="Durable URL to the marking-scheme PDF. Required for exams and quizzes; "
+        "optional for homework — omit it to grade from the model's own subject knowledge "
+        "(right/wrong per question, no marks).",
+    )
     questions_pdf_url: str | None = Field(
         default=None,
         description="Durable URL to the questions PDF — required for handwritten "
@@ -140,6 +145,16 @@ class GradedQuestion(BaseModel):
     question_id: str = Field(description="Question (or sub-part) identifier, e.g. '1', '3a-i'.")
     prompt_summary: str | None = Field(default=None, description="Question stem essence (from the rubric).")
     comment: str = Field(default="", description="Per-question overall summary, addressed to the student.")
+    verdict: Literal["correct", "incorrect", "partial"] | None = Field(
+        default=None,
+        description="Knowledge-graded homework only (grading_mode='knowledge'): whether the "
+        "answer is right. None for rubric-/marks-graded questions and for unattempted ones.",
+    )
+    correct_answer: str | None = Field(
+        default=None,
+        description="Knowledge-graded homework only: the correct/model answer to this question, "
+        "from the model's own knowledge. None in rubric/marks mode.",
+    )
     points_earned: float = Field(description="Total points earned for this question.")
     points_possible: float = Field(description="Maximum points this question is worth.")
     status: Literal["graded", "unattempted", "recovered", "merged"] = Field(
@@ -172,17 +187,81 @@ class QuestionMarks(BaseModel):
 
 
 class GradedScorecardResponse(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "test_id": 211,
+                    "subject": "AP Biology",
+                    "test_name": "Chapter 5 Homework",
+                    "generated_at": "2026-08-05T10:30:00Z",
+                    "grading_mode": "knowledge",
+                    "percentage": 0,
+                    "total_points_earned": 0,
+                    "total_points_possible": 0,
+                    "question_wise_marks": [],
+                    "correct_count": 2,
+                    "questions_total": 3,
+                    "questions_graded": 3,
+                    "is_handwritten": False,
+                    "questions": [
+                        {
+                            "question_id": "1",
+                            "comment": "Correct — you identified the mitochondrion as the site of aerobic respiration.",
+                            "verdict": "correct",
+                            "correct_answer": "The mitochondrion is the site of aerobic (cellular) respiration.",
+                            "points_earned": 0,
+                            "points_possible": 0,
+                            "status": "graded",
+                        },
+                        {
+                            "question_id": "2",
+                            "comment": "Partially right: you named the independent but not the dependent variable.",
+                            "verdict": "partial",
+                            "correct_answer": "Independent variable: temperature; dependent variable: reaction rate.",
+                            "points_earned": 0,
+                            "points_possible": 0,
+                            "status": "graded",
+                        },
+                    ],
+                    "unattempted": [],
+                }
+            ]
+        }
+    )
+
     test_id: int = Field(description="tests.id of the graded exam.")
     subject: str = Field(description="Resolved subject name (e.g. 'AP Biology').")
     test_name: str | None = Field(default=None, description="Human-readable exam label, if known.")
     generated_at: str = Field(description="ISO-8601 timestamp when this scorecard was produced.")
-    percentage: float = Field(description="Final score as a percentage (0-100).")
-    total_points_earned: float = Field(description="Sum of points earned across all questions.")
-    total_points_possible: float = Field(description="Total points available across the exam.")
+    grading_mode: Literal["rubric", "knowledge"] = Field(
+        default="rubric",
+        description="How this was graded: 'rubric' = against a marking scheme, with marks "
+        "(the default for exams/quizzes/homework with a marking scheme); 'knowledge' = homework "
+        "graded from the model's own knowledge, right/wrong only (marks fields are 0 — read "
+        "correct_count/questions_total and each question's verdict instead).",
+    )
+    percentage: float = Field(description="Final score as a percentage (0-100). Always 0 in 'knowledge' mode.")
+    total_points_earned: float = Field(
+        description="Sum of points earned across all questions. Always 0 in 'knowledge' mode."
+    )
+    total_points_possible: float = Field(
+        description="Total points available across the exam. Always 0 in 'knowledge' mode."
+    )
     question_wise_marks: list[QuestionMarks] = Field(
         default_factory=list,
         description="Earned marks per major question (sub-parts summed), for direct "
-        "mapping to questions.",
+        "mapping to questions. Empty in 'knowledge' mode.",
+    )
+    correct_count: int | None = Field(
+        default=None,
+        description="'knowledge' mode only: how many questions the student got fully correct "
+        "(the X in 'X of Y correct'). None in 'rubric' mode.",
+    )
+    questions_total: int | None = Field(
+        default=None,
+        description="'knowledge' mode only: total questions judged (the Y in 'X of Y correct'). "
+        "None in 'rubric' mode.",
     )
     questions_graded: int = Field(description="Number of questions actually graded (excludes unattempted).")
     review_flags: list[str] = Field(

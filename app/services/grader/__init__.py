@@ -18,7 +18,10 @@ from .core import (
     parse_rubric_pdf,
     render_pdf_to_images,
 )
+from .knowledge import grade_submission_knowledge
 from .schemas import (
+    KnowledgeAnswerVerdict,
+    KnowledgeScorecard,
     ParsedRubric,
     ParsedSubmission,
     QuestionRubric,
@@ -35,6 +38,7 @@ OCR_PROMPT = PROMPTS_DIR / "ocr.txt"
 RUBRIC_PROMPT = PROMPTS_DIR / "rubric_extract.txt"
 GRADE_PROMPT = PROMPTS_DIR / "grade_question.txt"
 SEGMENT_TYPED_PROMPT = PROMPTS_DIR / "segment_typed.txt"
+KNOWLEDGE_GRADE_PROMPT = PROMPTS_DIR / "knowledge_grade.txt"
 
 __all__ = [  # noqa: RUF022 — grouped by category & pipeline order, not alphabetical
     # pipeline primitives
@@ -45,6 +49,7 @@ __all__ = [  # noqa: RUF022 — grouped by category & pipeline order, not alphab
     "parse_rubric_pdf",
     "flatten_rubric_by_subpart",
     "grade_submission",
+    "grade_submission_knowledge",
     "GradeSubmissionResult",
     # schemas
     "ParsedRubric",
@@ -55,10 +60,13 @@ __all__ = [  # noqa: RUF022 — grouped by category & pipeline order, not alphab
     "QuestionScorecard",
     "RubricPointScore",
     "Scorecard",
+    "KnowledgeAnswerVerdict",
+    "KnowledgeScorecard",
     # prompt paths
     "PROMPTS_DIR",
     "OCR_PROMPT",
     "RUBRIC_PROMPT",
     "GRADE_PROMPT",
     "SEGMENT_TYPED_PROMPT",
+    "KNOWLEDGE_GRADE_PROMPT",
 ]

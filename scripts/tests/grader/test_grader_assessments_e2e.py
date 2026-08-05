@@ -33,6 +33,9 @@ exam bodies:
   * quiz     = quiz #869 (real row) — AP World History (course 30), REAL marking scheme
     (parses to 18 questions / 32 pts) -> AP prompt set, graded TYPED.
   * exam     = tests #536 — AP Biology (course 14), graded TYPED (regression).
+  * homework-knowledge = docs_homework_test #124 — AP Biology (course 14), registered WITHOUT a
+    marking scheme -> graded from the model's OWN knowledge (grading_mode="knowledge": per-question
+    verdict + correct answer + "X of Y correct", NO marks), graded TYPED.
 All PDFs are public S3.
 
 Preconditions
@@ -46,10 +49,11 @@ Not collected by pytest (hits real infra); run it directly:
 
     python scripts/tests/grader/test_grader_assessments_e2e.py
 
-Env overrides (all optional): GRADER_BASE_URL, GRADER_HW_SOURCE_ID, GRADER_QUIZ_SOURCE_ID,
-GRADER_EXAM_TEST_ID, GRADER_HW_COURSE_ID / GRADER_QUIZ_COURSE_ID / GRADER_EXAM_COURSE_ID,
-GRADER_HW_MARKING_URL / GRADER_HW_QUESTIONS_URL / GRADER_HW_ANSWERS_URL / GRADER_QUIZ_MARKING_URL /
-GRADER_EXAM_MARKING_URL, GRADER_STUDENT_ID (base; +1 per assessment), GRADER_POLL_CAP.
+Env overrides (all optional): GRADER_BASE_URL, GRADER_HW_SOURCE_ID, GRADER_HW_KNOWLEDGE_SOURCE_ID,
+GRADER_QUIZ_SOURCE_ID, GRADER_EXAM_TEST_ID, GRADER_HW_COURSE_ID / GRADER_QUIZ_COURSE_ID /
+GRADER_EXAM_COURSE_ID, GRADER_HW_MARKING_URL / GRADER_HW_QUESTIONS_URL / GRADER_HW_ANSWERS_URL /
+GRADER_QUIZ_MARKING_URL / GRADER_EXAM_MARKING_URL, GRADER_STUDENT_ID (base; +1 per assessment),
+GRADER_POLL_CAP.
 """
 from __future__ import annotations
 
@@ -90,6 +94,12 @@ HW_MARKING_URL = os.environ.get("GRADER_HW_MARKING_URL", f"{_HW_S3}/marking-sche
 HW_QUESTIONS_URL = os.environ.get("GRADER_HW_QUESTIONS_URL", f"{_HW_S3}/questions.pdf")
 HW_ANSWERS_URL = os.environ.get("GRADER_HW_ANSWERS_URL", f"{_HW_S3}/answers.pdf")
 
+# Rubric-free homework: a REAL docs_homework_test row graded WITHOUT a marking scheme —
+# right/wrong from the model's own knowledge (no marks). Reuses the AP Biology questions
+# PDF; graded TYPED. Needs its OWN source id (registration is idempotent per (type, id), so
+# it can't reuse HW_SOURCE_ID which is registered with a marking scheme above).
+HW_KNOWLEDGE_SOURCE_ID = int(os.environ.get("GRADER_HW_KNOWLEDGE_SOURCE_ID", "124"))
+
 # Quiz: REAL row quiz #869 — AP World History (course 30), REAL marking scheme
 # (parses to 18 questions / 32 points). Graded TYPED.
 QUIZ_SOURCE_ID = int(os.environ.get("GRADER_QUIZ_SOURCE_ID", "869"))
@@ -128,6 +138,17 @@ EXAM_TYPED_ANSWERS = {
     "2": (
         "In aerobic cellular respiration glucose is oxidized through glycolysis, the Krebs cycle, and "
         "the electron transport chain, where oxygen is the final electron acceptor and most ATP is made."
+    ),
+}
+# Typed answers for the rubric-free homework (graded from the model's own AP Biology knowledge).
+HW_KNOWLEDGE_TYPED_ANSWERS = {
+    "1": (
+        "Natural selection increases the frequency of advantageous heritable traits because the "
+        "individuals carrying them survive and reproduce more, so those alleles spread over generations."
+    ),
+    "2": (
+        "Enzymes speed up reactions by lowering the activation energy, stabilizing the transition "
+        "state; they are substrate-specific and are not consumed by the reaction."
     ),
 }
 
@@ -213,6 +234,7 @@ class Assessment:
     questions_url: str | None = None
     answers_url: str | None = None
     typed_answers: dict | None = None
+    rubric_free: bool = False  # homework registered WITHOUT a marking scheme (knowledge-graded)
     # outcomes
     registered: bool = False
     total_points: float | None = None
@@ -229,6 +251,17 @@ def summarize_scorecard(a: Assessment, sc: dict) -> None:
     log("")
     log(f"SCORECARD — {a.label} ({a.assessment_type} #{a.source_id})")
     log(f"  subject               : {sc.get('subject')}")
+    if sc.get("grading_mode") == "knowledge":
+        # Rubric-free homework: right/wrong from the model's own knowledge, no marks.
+        log("  grading_mode          : knowledge (right/wrong, no marks)")
+        log(f"  correct               : {sc.get('correct_count')} / {sc.get('questions_total')}")
+        log(f"  review_flags          : {sc.get('review_flags')}")
+        for q in sc.get("questions", []):
+            log(
+                f"    - {q.get('question_id')}: {q.get('verdict')}  "
+                f"(correct answer: {q.get('correct_answer')})"
+            )
+        return
     log(f"  percentage            : {sc.get('percentage')}")
     log(f"  points earned/possible: {sc.get('total_points_earned')} / {sc.get('total_points_possible')}")
     log(f"  questions_graded      : {sc.get('questions_graded')}")
@@ -255,8 +288,9 @@ def register_assessment(client: httpx.Client, a: Assessment) -> None:
         "course_id": a.course_id,
         "title": a.title,
         "is_handwritten": a.is_handwritten,
-        "marking_scheme_pdf_url": a.marking_url,
     }
+    if not a.rubric_free:  # rubric-free homework omits the marking scheme on purpose
+        payload["marking_scheme_pdf_url"] = a.marking_url
     if a.questions_url:
         payload["questions_pdf_url"] = a.questions_url
     try:
@@ -275,9 +309,15 @@ def register_assessment(client: httpx.Client, a: Assessment) -> None:
     check(f"{a.label}: response carries source_id (not test_id)",
           body.get("source_id") == a.source_id and "test_id" not in body,
           f"source_id={body.get('source_id')} test_id_present={'test_id' in body}")
-    check(f"{a.label}: rubric parsed (question_count > 0)",
-          isinstance(body.get("question_count"), int) and body["question_count"] > 0,
-          f"question_count={body.get('question_count')} total_points={body.get('total_points')}")
+    if a.rubric_free:
+        # No marking scheme -> no rubric parsed -> 0 points / 0 questions, no Gemini call.
+        check(f"{a.label}: registered rubric-free (question_count == 0)",
+              body.get("question_count") == 0 and (body.get("total_points") or 0) == 0,
+              f"question_count={body.get('question_count')} total_points={body.get('total_points')}")
+    else:
+        check(f"{a.label}: rubric parsed (question_count > 0)",
+              isinstance(body.get("question_count"), int) and body["question_count"] > 0,
+              f"question_count={body.get('question_count')} total_points={body.get('total_points')}")
     a.registered = True
     a.total_points = body.get("total_points")
     a.question_count = body.get("question_count")
@@ -371,8 +411,19 @@ def poll_until_done(client: httpx.Client, assessments: list[Assessment]) -> None
                     a.points_earned = sc.get("total_points_earned")
                     a.points_possible = sc.get("total_points_possible")
                     summarize_scorecard(a, sc)
-                    check(f"{a.label}: grading succeeded + scorecard present",
-                          isinstance(sc, dict) and sc.get("percentage") is not None)
+                    if a.rubric_free:
+                        vok = (
+                            sc.get("grading_mode") == "knowledge"
+                            and isinstance(sc.get("correct_count"), int)
+                            and isinstance(sc.get("questions_total"), int)
+                            and all(q.get("verdict") for q in sc.get("questions", []))
+                        )
+                        check(f"{a.label}: knowledge grade (verdicts + X/Y correct, no marks)", vok,
+                              f"mode={sc.get('grading_mode')} "
+                              f"correct={sc.get('correct_count')}/{sc.get('questions_total')}")
+                    else:
+                        check(f"{a.label}: grading succeeded + scorecard present",
+                              isinstance(sc, dict) and sc.get("percentage") is not None)
                 else:
                     a.error = body.get("error") if isinstance(body, dict) else "failed"
                     check(f"{a.label}: grading succeeded", False, f"failed: {a.error}")
@@ -526,6 +577,15 @@ def main() -> int:
         is_handwritten=False, title="AP Statistics (regression E2E TEST)",
         marking_url=EXAM_MARKING_URL, typed_answers=EXAM_TYPED_ANSWERS,
     )
+    # Rubric-free homework: no marking scheme -> graded from the model's own knowledge
+    # (grading_mode="knowledge", verdicts + "X of Y correct", no marks). Graded TYPED.
+    hw_knowledge = Assessment(
+        label="homework-knowledge", surface="assessments", assessment_type="homework",
+        source_id=HW_KNOWLEDGE_SOURCE_ID, course_id=HW_COURSE_ID, student_id=STUDENT_BASE + 3,
+        is_handwritten=False, title="Homework (E2E TEST — no marking scheme, graded by AI knowledge)",
+        marking_url="", questions_url=HW_QUESTIONS_URL, typed_answers=HW_KNOWLEDGE_TYPED_ANSWERS,
+        rubric_free=True,
+    )
 
     rule("=")
     log("GRADER ASSESSMENTS E2E — real homework + real quiz (new surface) + exam regression")
@@ -533,6 +593,8 @@ def main() -> int:
     log(f"homework : docs_homework_test #{homework.source_id}  course {homework.course_id}  handwritten")
     log(f"quiz     : quiz #{quiz.source_id}  course {quiz.course_id}  typed  (REAL marking scheme)")
     log(f"exam     : tests #{exam.source_id}  course {exam.course_id}  typed  (regression)")
+    log(f"hw(know) : docs_homework_test #{hw_knowledge.source_id}  course {hw_knowledge.course_id}  "
+        f"typed  (NO marking scheme -> AI knowledge)")
     log(f"log file = {LOG_PATH}")
     rule("=")
 
@@ -542,7 +604,7 @@ def main() -> int:
             call(client, "GET", "/grader/exams")
         except httpx.HTTPError:
             log(f"!! could not reach {BASE_URL}. Start the server, then re-run.")
-            return _finish([homework, quiz, exam])
+            return _finish([homework, quiz, hw_knowledge, exam])
 
         # 1) Contract/error checks first (cheap, no LLM).
         check_error_envelope(client)
@@ -552,6 +614,7 @@ def main() -> int:
         log("REGISTRATION")
         register_assessment(client, homework)
         register_assessment(client, quiz)
+        register_assessment(client, hw_knowledge)
         register_exam(client, exam)
 
         # 3) Listings (new surface) once both assessments are registered.
@@ -561,17 +624,17 @@ def main() -> int:
         # 4) Submit everything, then poll all jobs together (grades overlap).
         rule("=")
         log("SUBMISSIONS")
-        for a in (homework, quiz, exam):
+        for a in (homework, quiz, hw_knowledge, exam):
             if a.registered:
                 submit(client, a)
 
-        poll_until_done(client, [homework, quiz, exam])
+        poll_until_done(client, [homework, quiz, hw_knowledge, exam])
 
         # 5) Job lookups (both surfaces) after grading.
         check_assessment_jobs(client, homework, quiz)
         check_exam_regression(client, exam)
 
-    return _finish([homework, quiz, exam])
+    return _finish([homework, quiz, hw_knowledge, exam])
 
 
 def _finish(assessments: list[Assessment]) -> int:

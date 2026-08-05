@@ -28,14 +28,28 @@ class RegisterAssessmentRequest(BaseModel):
         json_schema_extra={
             "examples": [
                 {
-                    "assessment_type": "homework",
-                    "source_id": 211,
-                    "course_id": "16",
-                    "title": "Chapter 5 Homework",
-                    "is_handwritten": True,
-                    "marking_scheme_pdf_url": "https://files.example.com/ms/hw-211.pdf",
-                    "questions_pdf_url": "https://files.example.com/q/hw-211.pdf",
-                }
+                    "summary": "Homework with a marking scheme (rubric-graded, with marks)",
+                    "value": {
+                        "assessment_type": "homework",
+                        "source_id": 211,
+                        "course_id": "16",
+                        "title": "Chapter 5 Homework",
+                        "is_handwritten": True,
+                        "marking_scheme_pdf_url": "https://files.example.com/ms/hw-211.pdf",
+                        "questions_pdf_url": "https://files.example.com/q/hw-211.pdf",
+                    },
+                },
+                {
+                    "summary": "Homework without a marking scheme (AI knowledge, right/wrong only)",
+                    "value": {
+                        "assessment_type": "homework",
+                        "source_id": 212,
+                        "course_id": "16",
+                        "title": "Chapter 6 Homework",
+                        "is_handwritten": False,
+                        "questions_pdf_url": "https://files.example.com/q/hw-212.pdf",
+                    },
+                },
             ]
         }
     )
@@ -61,17 +75,35 @@ class RegisterAssessmentRequest(BaseModel):
         description="True = handwritten (answers from a PDF, OCR'd); False = typed "
         "(answers supplied inline at submission time)."
     )
-    marking_scheme_pdf_url: str = Field(description="Durable URL to the marking-scheme PDF.")
+    marking_scheme_pdf_url: str | None = Field(
+        default=None,
+        description="Durable URL to the marking-scheme PDF. Required for quizzes; optional for "
+        "homework — omit it to grade from the model's own subject knowledge (right/wrong per "
+        "question, no marks). When omitted, questions_pdf_url is required.",
+    )
     questions_pdf_url: str | None = Field(
         default=None,
-        description="Durable URL to the questions PDF — required for handwritten "
-        "assessments (used as OCR context); ignored for typed ones.",
+        description="Durable URL to the questions PDF. Required for handwritten assessments (OCR "
+        "context) and for any homework graded without a marking scheme (the model reads the "
+        "questions to judge answers from its own knowledge); optional for typed, marking-scheme-"
+        "graded ones.",
     )
 
     @model_validator(mode="after")
-    def _require_questions_pdf_for_handwritten(self) -> RegisterAssessmentRequest:
+    def _validate_pdfs(self) -> RegisterAssessmentRequest:
+        # Quizzes always need a marking scheme; only homework may be graded without one.
+        if self.assessment_type == "quiz" and not self.marking_scheme_pdf_url:
+            raise ValueError("marking_scheme_pdf_url is required for quizzes")
+        # Handwritten always needs the questions PDF (OCR context).
         if self.is_handwritten and not self.questions_pdf_url:
             raise ValueError("questions_pdf_url is required for handwritten assessments")
+        # Graded without a marking scheme (homework knowledge mode) needs the questions PDF —
+        # typed too — so the model can see each question and judge the answer itself.
+        if not self.marking_scheme_pdf_url and not self.questions_pdf_url:
+            raise ValueError(
+                "questions_pdf_url is required when no marking_scheme_pdf_url is provided "
+                "(the questions are needed to grade from the model's own knowledge)"
+            )
         return self
 
 
@@ -197,7 +229,21 @@ class AssessmentJobSummary(BaseModel):
         description="True if the finished scorecard has items flagged for human review.",
     )
     percentage: float | None = Field(
-        default=None, description="Final score %, present once status == 'succeeded'."
+        default=None,
+        description="Final score %, present once status == 'succeeded' (null for 'knowledge'-mode "
+        "homework, which has no marks — read correct_count/questions_total instead).",
+    )
+    grading_mode: Literal["rubric", "knowledge"] | None = Field(
+        default=None,
+        description="How it was graded: 'rubric' (marks) or 'knowledge' (right/wrong), once succeeded.",
+    )
+    correct_count: int | None = Field(
+        default=None,
+        description="'knowledge' mode: questions correct (the X in 'X of Y'), once succeeded.",
+    )
+    questions_total: int | None = Field(
+        default=None,
+        description="'knowledge' mode: total questions judged (the Y in 'X of Y'), once succeeded.",
     )
     title: str | None = Field(default=None, description="Human-readable assessment label, if known.")
     created_at: str | None = Field(default=None, description="ISO-8601 time the job was enqueued.")

@@ -11,7 +11,12 @@ from unittest.mock import AsyncMock, patch
 
 from app.core.errors import InvalidSubmissionError, TestNotRegisteredError
 from app.schemas.assessment_schema import AssessmentJobResponse, AssessmentJobSummary
-from app.schemas.grader_schema import ExamSummary, RegisterExamResponse
+from app.schemas.grader_schema import (
+    ExamSummary,
+    GradedQuestion,
+    GradedScorecardResponse,
+    RegisterExamResponse,
+)
 
 
 def _exam_response(**overrides) -> RegisterExamResponse:
@@ -55,6 +60,111 @@ async def test_register_homework_maps_source_id_and_type(client):
     # The service was called with assessment_type (from the body) forwarded as the 2nd arg.
     args, _ = mock_register.call_args
     assert args[1] == "homework"
+
+
+async def test_register_homework_without_marking_scheme_ok(client):
+    # Homework may omit marking_scheme_pdf_url (graded from AI knowledge) as long as a
+    # questions PDF is supplied. The service returns a 0-point registration (no rubric).
+    with patch(
+        "app.services.grader_exam_service.register_exam",
+        new=AsyncMock(
+            return_value=_exam_response(total_points=0.0, question_count=0, is_handwritten=False)
+        ),
+    ):
+        resp = await client.post(
+            "/api/v1/grader/assessments/register",
+            json={
+                "assessment_type": "homework",
+                "source_id": 212,
+                "course_id": "16",
+                "title": "Chapter 6 Homework",
+                "is_handwritten": False,
+                "questions_pdf_url": "https://example.com/q.pdf",
+            },
+        )
+    assert resp.status_code == 201
+    assert resp.json()["total_points"] == 0.0
+
+
+async def test_register_homework_without_scheme_or_questions_is_422(client):
+    # No marking scheme AND no questions PDF → nothing to grade against → validation error.
+    resp = await client.post(
+        "/api/v1/grader/assessments/register",
+        json={
+            "assessment_type": "homework",
+            "source_id": 212,
+            "course_id": "16",
+            "title": "Chapter 6 Homework",
+            "is_handwritten": False,
+        },
+    )
+    assert resp.status_code == 422
+
+
+async def test_register_quiz_without_marking_scheme_is_422(client):
+    # Only homework may omit the marking scheme; a quiz without one is rejected.
+    resp = await client.post(
+        "/api/v1/grader/assessments/register",
+        json={
+            "assessment_type": "quiz",
+            "source_id": 869,
+            "course_id": "30",
+            "title": "Unit 3 Quiz",
+            "is_handwritten": False,
+            "questions_pdf_url": "https://example.com/q.pdf",
+        },
+    )
+    assert resp.status_code == 422
+
+
+async def test_poll_knowledge_job_surfaces_verdicts(client):
+    # A rubric-free homework job returns grading_mode='knowledge' with verdicts + an
+    # "X of Y correct" tally and zeroed marks — all through the shared scorecard model.
+    scorecard = GradedScorecardResponse(
+        test_id=212,
+        subject="AP Biology",
+        generated_at="2026-08-05T00:00:00Z",
+        grading_mode="knowledge",
+        percentage=0.0,
+        total_points_earned=0.0,
+        total_points_possible=0.0,
+        correct_count=2,
+        questions_total=3,
+        questions_graded=3,
+        is_handwritten=False,
+        questions=[
+            GradedQuestion(
+                question_id="1",
+                comment="Correct.",
+                verdict="correct",
+                correct_answer="Mitochondria",
+                points_earned=0.0,
+                points_possible=0.0,
+                status="graded",
+            )
+        ],
+    )
+    job = AssessmentJobResponse(
+        job_id="jobKN",
+        assessment_type="homework",
+        source_id=212,
+        student_id=7,
+        status="succeeded",
+        is_handwritten=False,
+        scorecard=scorecard,
+    )
+    with patch(
+        "app.services.grader_job_service.get_assessment_job", new=AsyncMock(return_value=job)
+    ):
+        resp = await client.get("/api/v1/grader/assessments/jobs/jobKN")
+    assert resp.status_code == 200
+    card = resp.json()["scorecard"]
+    assert card["grading_mode"] == "knowledge"
+    assert card["correct_count"] == 2
+    assert card["questions_total"] == 3
+    assert card["percentage"] == 0.0
+    assert card["questions"][0]["verdict"] == "correct"
+    assert card["questions"][0]["correct_answer"] == "Mitochondria"
 
 
 async def test_register_handwritten_requires_questions_pdf(client):

@@ -29,8 +29,9 @@ Usage (PowerShell) — set up, point the app at it, run the e2e:
 Env:
     DB_HOST / DB_PORT / DB_USER / DB_PASSWORD / DB_NAME  — the shared source DB (.env)
     GRADER_E2E_DB   — throwaway DB name to create (default: grader_e2e)
-    GRADER_E2E_HW_ID / _QUIZ_ID / _EXAM_ID — seeded source ids
-                      (defaults 123 / 869 / 536; must match the e2e's source ids)
+    GRADER_E2E_HW_ID / _HW_KNOWLEDGE_ID / _QUIZ_ID / _EXAM_ID — seeded source ids
+                      (defaults 123 / 124 / 869 / 536; must match the e2e's source ids;
+                       _HW_KNOWLEDGE_ID is the rubric-free/no-marking-scheme homework row)
 
 If the schema below ever drifts from the central migrations, re-derive it from
 ``apguru-centralized-alembic`` (``020`` create + ``026`` test_id identity + ``042``
@@ -132,6 +133,8 @@ async def main() -> None:
     shared = env["DB_NAME"]  # read-only source for the course_configs copy
     e2e = os.environ.get("GRADER_E2E_DB", "grader_e2e")
     hw_id = int(os.environ.get("GRADER_E2E_HW_ID", "123"))
+    # Second homework row for the rubric-free (no marking scheme) knowledge-grading case.
+    hw_knowledge_id = int(os.environ.get("GRADER_E2E_HW_KNOWLEDGE_ID", "124"))
     quiz_id = int(os.environ.get("GRADER_E2E_QUIZ_ID", "869"))
     exam_id = int(os.environ.get("GRADER_E2E_EXAM_ID", "536"))
 
@@ -155,7 +158,7 @@ async def main() -> None:
         f"SELECT {_COURSE_COLS} FROM `{shared}`.course_configs WHERE is_active = 1"
     )
     await cur.execute(f"INSERT INTO `{e2e}`.tests (id) VALUES ({exam_id})")
-    await cur.execute(f"INSERT INTO `{e2e}`.docs_homework_test (id) VALUES ({hw_id})")
+    await cur.execute(f"INSERT INTO `{e2e}`.docs_homework_test (id) VALUES ({hw_id}), ({hw_knowledge_id})")
     await cur.execute(f"INSERT INTO `{e2e}`.quiz (id) VALUES ({quiz_id})")
 
     await cur.execute(f"SELECT COUNT(*) FROM `{e2e}`.course_configs")
@@ -164,7 +167,10 @@ async def main() -> None:
 
     print(f"OK: created `{e2e}` on {env['DB_HOST']}")
     print(f"  course_configs copied: {n_courses} rows")
-    print(f"  seeded source ids -> tests={exam_id}, docs_homework_test={hw_id}, quiz={quiz_id}")
+    print(
+        f"  seeded source ids -> tests={exam_id}, "
+        f"docs_homework_test={hw_id},{hw_knowledge_id}, quiz={quiz_id}"
+    )
     print(f"  next: set DB_NAME={e2e}, run the app, then test_grader_assessments_e2e.py")
 
 

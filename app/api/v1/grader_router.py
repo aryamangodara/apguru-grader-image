@@ -121,6 +121,12 @@ _REGISTER_ERROR_RESPONSES = {
                 "host 'files.internal' resolves to a non-public address (10.0.0.5)",
                 "a PDF URL is unfetchable / SSRF-blocked",
             ),
+            (
+                "marking_scheme_required",
+                ErrorCode.MARKING_SCHEME_REQUIRED,
+                "marking_scheme_pdf_url is required for exam registration",
+                "marking_scheme_pdf_url omitted (only homework may be graded without one)",
+            ),
         ),
         "description": "The test_id, course_id, or a supplied PDF URL was rejected.",
     }
@@ -270,6 +276,8 @@ async def register_exam(
     * **400 ``INVALID_TEST_ID``** — ``test_id`` isn't a live row in the ``tests`` table.
     * **400 ``UNKNOWN_COURSE``** — ``course_id`` has no ``course_configs`` row.
     * **400 ``INVALID_PDF_URL``** — a supplied PDF URL is unfetchable / SSRF-blocked.
+    * **400 ``MARKING_SCHEME_REQUIRED``** — ``marking_scheme_pdf_url`` omitted; exams always
+      need one (only homework, on the ``/grader/assessments`` surface, may be graded without it).
     * **422** — request validation (e.g. handwritten exam missing ``questions_pdf_url``).
     """
     return await grader_controller.register_exam(body)

@@ -153,6 +153,32 @@ curl -X POST localhost:8080/api/v1/grader/assessments/211/submissions -H 'Conten
 
 `assessment_type` tells the grader **what kind**; `source_id` tells it **which one** (a homework and a quiz can share a number, so the type travels in the body on submit too). Failures use the same `{error_code, detail}` envelope as the exam surface.
 
+#### Homework without a marking scheme (graded by AI knowledge)
+
+**Homework** may be registered **without** `marking_scheme_pdf_url`. It is then graded from the
+model's own subject knowledge: each answer is marked **correct / incorrect / partial** with a short
+explanation and the **correct answer** — **no marks, no percentage**, just an "X of Y correct" tally.
+`questions_pdf_url` is **required** in this mode (typed submissions too) so the model can see each
+question. Quizzes and exams still require a marking scheme.
+
+```bash
+# register a homework with NO marking scheme (typed answers here; handwritten works too)
+curl -X POST localhost:8080/api/v1/grader/assessments/register -H 'Content-Type: application/json' -d '{
+  "assessment_type": "homework",
+  "source_id": 212,
+  "course_id": "16",
+  "title": "Chapter 6 Homework",
+  "is_handwritten": false,
+  "questions_pdf_url": "https://example.com/questions.pdf"
+}'
+# → 201 { …, "total_points": 0, "question_count": 0 }   (no rubric parsed)
+```
+
+The polled scorecard comes back with `grading_mode: "knowledge"`, `correct_count` / `questions_total`,
+and per-question `verdict` + `correct_answer` (the marks fields — `percentage`, `points_earned`, … —
+are `0`). Registering homework this way makes **no** Gemini call (the rubric parse is skipped); the one
+knowledge-grade call happens at submission time.
+
 ### Errors
 
 Every failure returns one envelope — a stable, machine-readable `error_code` plus a human-readable `detail` — so clients can branch on the code instead of parsing messages:
@@ -167,6 +193,7 @@ Every failure returns one envelope — a stable, machine-readable `error_code` p
 | 400 | `INVALID_SUBMISSION` | Missing `answers_pdf_url` (handwritten) or `answers` (typed). |
 | 400 | `INVALID_PDF_URL` | A supplied PDF URL failed the SSRF / URL guard. |
 | 400 | `UNKNOWN_COURSE` | `course_id` has no `course_configs` row. |
+| 400 | `MARKING_SCHEME_REQUIRED` | `marking_scheme_pdf_url` omitted for an exam/quiz (only homework may be graded without one). |
 | 400 | `MISSING_JOB_FILTER` | `GET /grader/jobs` with neither `student_id` nor `test_id`. |
 | 404 | `TEST_NOT_REGISTERED` | Submitting to a `test_id` that was never registered. |
 | 404 | `JOB_NOT_FOUND` | Polling an unknown `job_id`. |
