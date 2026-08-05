@@ -56,7 +56,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title=settings.app_name,
-        version="1.6.0",
+        version="1.7.0",
         description=(
             "Auto-grades free-response work from handwritten or typed student submissions — "
             "AP® exams/tests plus homework & quizzes (the /grader/assessments surface)."
