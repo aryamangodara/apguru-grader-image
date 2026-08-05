@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from datetime import datetime
 from typing import Any
 
@@ -32,6 +33,7 @@ from app.core.observability import (
 from app.schemas.grader_schema import ExamSummary, RegisterExamRequest, RegisterExamResponse
 from app.services.grader import (
     ParsedRubric,
+    QuestionRubric,
     get_gemini_client,
     parse_rubric_pdf,
 )
@@ -94,6 +96,44 @@ async def assert_source_is_valid(source_id: int, assessment_type: str = "exam") 
 def get_cached_rubric(exam_row: dict) -> ParsedRubric:
     """Rehydrate the cached ParsedRubric for an exam — no Gemini call."""
     return ParsedRubric.model_validate_json(exam_row["rubric_json"])
+
+
+# Grader is FRQ-only: multiple-choice questions must never be graded, shown, or counted.
+# The rubric parser emits an MCQ's answer key as a "Correct Answer: (X)" criterion; genuine
+# free-response criteria describe what the student must demonstrate and never match this, so
+# the check cannot misfire on a real FRQ.
+_MCQ_CRITERION = re.compile(r"^\s*correct\s+answer\s*[:\-]?\s*\(?[A-Za-z0-9]\)?", re.IGNORECASE)
+
+
+def is_mcq_question(question: QuestionRubric) -> bool:
+    """True if a rubric question is multiple-choice.
+
+    Conservative by design: a question qualifies only when it HAS rubric points and EVERY
+    one is a bare "Correct Answer: (X)" answer-key criterion, so a free-response question
+    (whose criteria describe what to demonstrate) is never misclassified as MCQ.
+    """
+    points = question.rubric_points
+    return bool(points) and all(_MCQ_CRITERION.match(p.criterion or "") for p in points)
+
+
+def drop_mcq_questions(rubric: ParsedRubric) -> tuple[ParsedRubric, list[str]]:
+    """Return an FRQ-only copy of ``rubric`` and the ids of the MCQ questions removed.
+
+    The grader grades free-response only, so MCQs must not be graded, appear on the
+    scorecard, or count toward the denominator. Filters a COPY (the stored ``rubric_json``
+    is left untouched) and recomputes ``total_points`` from the kept questions. When the
+    rubric has no MCQs it is returned unchanged with an empty dropped list.
+    """
+    kept: list[QuestionRubric] = []
+    dropped: list[QuestionRubric] = []
+    for q in rubric.questions:
+        (dropped if is_mcq_question(q) else kept).append(q)
+    if not dropped:
+        return rubric, []
+    filtered = rubric.model_copy(
+        update={"questions": kept, "total_points": round(sum(q.max_points for q in kept), 2)}
+    )
+    return filtered, [q.question_id for q in dropped]
 
 
 def is_rubric_free(exam_row: dict) -> bool:
