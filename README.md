@@ -108,6 +108,13 @@ curl -X POST localhost:8080/api/v1/grader/exams/555/submissions -H 'Content-Type
 # → 202 {"job_id": "…", "status": "queued", ...}
 ```
 
+> **Typed answer keys are reconciled with the rubric by content.** If the keys in `answers`
+> don't match the rubric's question ids (e.g. a client keys `"21".."24"` for a rubric keyed
+> `"216a".."220"`), each answer is auto-mapped onto the question(s) it answers — those questions
+> come back flagged for review, with the applied `answer_mapping` on the scorecard. If the
+> answers can't be mapped confidently the job **fails** with `error: "ANSWER_MAPPING_FAILED: …"`
+> rather than return a misleading 0. Toggle with `GRADER_ENABLE_ANSWER_MAP` (default on).
+
 **Poll the job** until `status` is `succeeded` (or `failed`):
 
 ```bash

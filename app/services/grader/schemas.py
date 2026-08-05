@@ -197,3 +197,40 @@ class KnowledgeScorecard(BaseModel):
     answers: list[KnowledgeAnswerVerdict] = Field(
         description="One verdict per question found in the questions PDF, in question order."
     )
+
+
+# ---------------------------------------------------------------------------
+# Answer -> question content mapping (typed submissions keyed by the wrong ids)
+# ---------------------------------------------------------------------------
+
+class MappedAnswer(BaseModel):
+    """One submitted typed answer matched, by content, to the rubric question(s) it answers.
+
+    Used when a typed submission's answer keys don't line up with the rubric's
+    question ids (a mis-keyed client). The model reads each answer and each rubric
+    question's stem, then reports which question(s) the answer addresses — a single
+    free-response blob may cover several sub-parts (e.g. an SAQ answering '1a','1b','1c').
+    """
+    submitted_key: str = Field(
+        description="The key this answer was submitted under, verbatim (e.g. '21'), echoed back."
+    )
+    question_ids: list[str] = Field(
+        description="Rubric question id(s) this answer addresses, chosen ONLY from the provided "
+        "rubric questions. May be several (one blob covering multiple sub-parts). Empty ([]) if "
+        "the answer addresses none of the rubric questions. Never invent an id.",
+    )
+    confidence: float = Field(
+        description="Confidence in [0.0, 1.0] that this answer maps to the listed question(s). "
+        "Be honest and low when the answer is ambiguous or could fit several questions.",
+    )
+    reasoning: str = Field(
+        default="",
+        description="One short sentence citing the matched question stem(s) that justifies the mapping.",
+    )
+
+
+class AnswerQuestionMap(BaseModel):
+    """Gemini response schema: how each submitted answer maps onto the rubric's questions."""
+    mappings: list[MappedAnswer] = Field(
+        description="Exactly one entry per submitted answer, in the order the answers were provided."
+    )

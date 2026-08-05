@@ -212,7 +212,12 @@ class AssessmentJobResponse(BaseModel):
     scorecard: GradedScorecardResponse | None = Field(
         default=None, description="Present once status == 'succeeded'."
     )
-    error: str | None = Field(default=None, description="Present once status == 'failed'.")
+    error: str | None = Field(
+        default=None,
+        description="Present once status == 'failed'. A typed submission whose answers can't be "
+        "content-mapped to the rubric fails here with 'ANSWER_MAPPING_FAILED: <detail>' (the stable "
+        "code is prefixed so consumers can branch on it).",
+    )
 
 
 class AssessmentJobSummary(BaseModel):
@@ -249,7 +254,12 @@ class AssessmentJobSummary(BaseModel):
     created_at: str | None = Field(default=None, description="ISO-8601 time the job was enqueued.")
     started_at: str | None = Field(default=None, description="ISO-8601 time grading started, if begun.")
     finished_at: str | None = Field(default=None, description="ISO-8601 time grading finished, if done.")
-    error: str | None = Field(default=None, description="Present once status == 'failed'.")
+    error: str | None = Field(
+        default=None,
+        description="Present once status == 'failed'. A typed submission whose answers can't be "
+        "content-mapped to the rubric fails here with 'ANSWER_MAPPING_FAILED: <detail>' (the stable "
+        "code is prefixed so consumers can branch on it).",
+    )
 
 
 class AssessmentJobListResponse(BaseModel):

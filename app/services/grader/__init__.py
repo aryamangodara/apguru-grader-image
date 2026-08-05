@@ -8,6 +8,7 @@ repo — port logic changes back rather than diverging here.
 """
 from pathlib import Path
 
+from .answer_map import map_answers_to_questions
 from .core import (
     GradeSubmissionResult,
     flatten_rubric_by_subpart,
@@ -20,8 +21,10 @@ from .core import (
 )
 from .knowledge import grade_submission_knowledge
 from .schemas import (
+    AnswerQuestionMap,
     KnowledgeAnswerVerdict,
     KnowledgeScorecard,
+    MappedAnswer,
     ParsedRubric,
     ParsedSubmission,
     QuestionRubric,
@@ -39,6 +42,7 @@ RUBRIC_PROMPT = PROMPTS_DIR / "rubric_extract.txt"
 GRADE_PROMPT = PROMPTS_DIR / "grade_question.txt"
 SEGMENT_TYPED_PROMPT = PROMPTS_DIR / "segment_typed.txt"
 KNOWLEDGE_GRADE_PROMPT = PROMPTS_DIR / "knowledge_grade.txt"
+ANSWER_MAP_PROMPT = PROMPTS_DIR / "answer_map.txt"
 
 __all__ = [  # noqa: RUF022 — grouped by category & pipeline order, not alphabetical
     # pipeline primitives
@@ -50,6 +54,7 @@ __all__ = [  # noqa: RUF022 — grouped by category & pipeline order, not alphab
     "flatten_rubric_by_subpart",
     "grade_submission",
     "grade_submission_knowledge",
+    "map_answers_to_questions",
     "GradeSubmissionResult",
     # schemas
     "ParsedRubric",
@@ -62,6 +67,8 @@ __all__ = [  # noqa: RUF022 — grouped by category & pipeline order, not alphab
     "Scorecard",
     "KnowledgeAnswerVerdict",
     "KnowledgeScorecard",
+    "AnswerQuestionMap",
+    "MappedAnswer",
     # prompt paths
     "PROMPTS_DIR",
     "OCR_PROMPT",
@@ -69,4 +76,5 @@ __all__ = [  # noqa: RUF022 — grouped by category & pipeline order, not alphab
     "GRADE_PROMPT",
     "SEGMENT_TYPED_PROMPT",
     "KNOWLEDGE_GRADE_PROMPT",
+    "ANSWER_MAP_PROMPT",
 ]

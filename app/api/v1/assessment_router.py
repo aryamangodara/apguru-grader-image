@@ -335,6 +335,15 @@ async def create_submission(
     ``answers_pdf_url``; a **typed** assessment requires inline ``answers``. Sending the field for the
     wrong mode is the usual cause of ``INVALID_SUBMISSION``.
 
+    **Typed answer-key reconciliation.** For typed assessments the answer keys are
+    reconciled with the rubric by content: if they don't match the rubric's question ids
+    (a mis-keyed client, e.g. answers keyed ``"21".."24"`` for a rubric keyed
+    ``"216a".."220"``), each answer is content-mapped onto the question(s) it answers and
+    those questions come back flagged for review with an ``answer_mapping`` on the
+    scorecard. If the answers can't be mapped confidently the job **fails** with
+    ``error = "ANSWER_MAPPING_FAILED: …"`` instead of returning a misleading 0. These are
+    async outcomes on GET /grader/assessments/jobs/{job_id}, not on this 202 response.
+
     Errors (all rendered as the ``{error_code, detail}`` envelope; see the example responses):
 
     * **400 ``INVALID_SUBMISSION``** — body doesn't match the assessment's mode.
@@ -383,6 +392,11 @@ async def get_job(
 
     Works for both homework and quiz jobs (the job_id is globally unique); the response echoes the
     ``assessment_type`` it belongs to.
+
+    A typed job may **succeed** with an ``answer_mapping`` on the scorecard (and
+    ``review_required=true``) when its answer keys had to be content-mapped onto the
+    rubric, or **fail** with ``error = "ANSWER_MAPPING_FAILED: …"`` when they couldn't be
+    mapped confidently.
 
     * **404 ``JOB_NOT_FOUND``** — no grading job matches ``job_id``.
     """
